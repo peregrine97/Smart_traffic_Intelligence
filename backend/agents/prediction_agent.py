@@ -134,30 +134,6 @@ class PredictionAgent:
     def load_models(self) -> None:
         """
         Deserialise pre-trained models from disk into memory.
-
-        This method is called once during FastAPI startup
-        (``@app.on_event("startup")``).  It must be idempotent — calling it
-        twice is harmless.
-
-        TODO (future integration):
-        --------------------------
-        1. Import joblib.
-        2. Load the XGBoost priority classifier from ``self.classifier_path``
-           into ``self.classifier``.
-        3. Load the XGBoost duration regressor from ``self.regressor_path``
-           into ``self.regressor``.
-        4. Load the junction recurrence lookup dict from
-           ``self.junction_lookup_path`` into ``self.junction_recurrence``.
-        5. Load the zone LabelEncoder from ``self.zone_encoder_path``
-           into ``self.zone_encoder``.
-        6. Set ``self._models_loaded = True``.
-        7. Log model metadata (feature count, training date, etc.) at INFO
-           level for observability.
-
-        Raises
-        ------
-        FileNotFoundError
-            If any of the required model files do not exist on disk.
         """
         if self._models_loaded:
             logger.info("PredictionAgent models are already loaded.")
@@ -171,24 +147,34 @@ class PredictionAgent:
             ("junction_lookup_path", self.junction_lookup_path),
             ("zone_encoder_path", self.zone_encoder_path),
         ]:
-            if not path_val:
-                raise FileNotFoundError(f"Path for {path_name} is not configured.")
-            if not os.path.exists(path_val):
-                raise FileNotFoundError(f"Model file not found: {path_val}")
+            if not path_val or not os.path.exists(path_val):
+                logger.warning(
+                    f"WARNING: Model file not found or not configured: {path_name}={path_val}. "
+                    f"Models are not loaded. Please train the model first."
+                )
+                self._models_loaded = False
+                return
 
-        self.classifier = joblib.load(self.classifier_path)
-        self.regressor = joblib.load(self.regressor_path)
-        self.junction_recurrence = joblib.load(self.junction_lookup_path)
-        self.encoders = joblib.load(self.zone_encoder_path)
-        self.zone_encoder = self.encoders.get("zone")
+        try:
+            self.classifier = joblib.load(self.classifier_path)
+            self.regressor = joblib.load(self.regressor_path)
+            self.junction_recurrence = joblib.load(self.junction_lookup_path)
+            self.encoders = joblib.load(self.zone_encoder_path)
+            self.zone_encoder = self.encoders.get("zone")
 
-        self._models_loaded = True
-        logger.info(
-            "PredictionAgent models loaded successfully. "
-            "Classifier: %d features expected. Regressor: %d features expected.",
-            self.classifier.n_features_in_,
-            self.regressor.n_features_in_
-        )
+            self._models_loaded = True
+            logger.info(
+                "PredictionAgent models loaded successfully. "
+                "Classifier: %d features expected. Regressor: %d features expected.",
+                self.classifier.n_features_in_,
+                self.regressor.n_features_in_
+            )
+        except Exception as exc:
+            logger.warning(
+                f"WARNING: Failed to load models: {exc}. "
+                f"Models are not loaded. Please train the model first."
+            )
+            self._models_loaded = False
 
     # ------------------------------------------------------------------
     # Feature engineering
@@ -223,18 +209,18 @@ class PredictionAgent:
 
         Feature vector layout (in order)
         --------------------------------
-        0.  event_type            — binary: planned=1, unplanned=0
-        1.  corridor_rank         — ordinal: 0 / 1 / 2
-        2…14. event_cause one-hot — 13 columns (len of EVENT_CAUSE_CATEGORIES)
-        15…24. veh_type one-hot   — 10 columns (len of VEHICLE_TYPE_CATEGORIES)
-        25. requires_road_closure — 0 or 1
-        26. hour_of_day           — int 0–23
-        27. day_of_week           — int 0–6
-        28. is_peak_hour          — 0 or 1
-        29. is_weekend            — 0 or 1
-        30. zone (label-encoded)  — int (unknown → dedicated code)
-        31. junction_recurrence   — int (unknown → 1)
-        32. planned_duration_minutes — float (0.0 for unplanned)
+        0.  latitude              — float
+        1.  longitude             — float
+        2.  requires_road_closure — 0 or 1
+        3.  hour_of_day           — int 0–23
+        4.  day_of_week           — int 0–6
+        5.  is_peak_hour          — 0 or 1
+        6.  is_weekend            — 0 or 1
+        7.  corridor_rank         — ordinal: 0 / 1 / 2
+        8.  junction_recurrence   — int (unknown → 1)
+        9.  event_cause_enc       — int (label-encoded)
+        10. veh_type_enc          — int (label-encoded)
+        11. zone_enc              — int (label-encoded)
 
         TODO (future integration):
         --------------------------
@@ -243,29 +229,26 @@ class PredictionAgent:
         2. Encode ``event_type`` as binary int.
         3. Compute ``corridor_rank`` from the corridor string using the
            ORR_VARIANTS set and named-corridor list.
-        4. One-hot encode ``event_cause`` against EVENT_CAUSE_CATEGORIES.
-        5. One-hot encode ``veh_type`` against VEHICLE_TYPE_CATEGORIES.
-           If veh_type is None, all columns are 0.
+        4. Label encode ``event_cause`` against EVENT_CAUSE_CATEGORIES.
+        5. Label encode ``veh_type`` against VEHICLE_TYPE_CATEGORIES.
         6. Encode ``requires_road_closure`` as 0/1.
         7. Label-encode ``zone`` using ``self.zone_encoder``.  Use a
            reserved "unknown" code for null / unseen zones.
         8. Look up ``junction`` in ``self.junction_recurrence``.  Default 1
            for unknown / null junctions.
-        9. Set ``planned_duration_minutes`` (0 if unplanned or missing).
-        10. Concatenate all features into a single np.ndarray and return.
+        9. Concatenate all features into a single np.ndarray and return.
         """
         rec = incident.copy()
         corridor = rec.get("corridor")
         if corridor is None or pd.isna(corridor):
             corridor_rank = 0
         else:
-            c = str(corridor).strip()
-            if c in ORR_VARIANTS:
+            try:
+                from backend.data.loader import get_corridor_counts
+                counts = get_corridor_counts()
+                corridor_rank = counts.get(str(corridor).strip(), 1)
+            except Exception:
                 corridor_rank = 1
-            elif c in {"Non-corridor", ""}:
-                corridor_rank = 0
-            else:
-                corridor_rank = 2
         rec["corridor_rank"] = corridor_rank
 
         from backend.agents.feature_engineering import build_feature_vector as fe_build
@@ -398,8 +381,8 @@ class PredictionAgent:
         """
         if not self._models_loaded:
             raise RuntimeError(
-                "PredictionAgent models are not loaded. "
-                "Call load_models() during application startup."
+                "WARNING: Prediction models are not loaded. "
+                "Please train and save the models first."
             )
 
         # Step 1 — Feature engineering

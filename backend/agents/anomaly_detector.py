@@ -184,7 +184,16 @@ class TrafficAnomalyDetector:
     def score_live_zones(self, live_df: pd.DataFrame, current_time: Union[str, datetime] = None) -> List[Dict[str, Any]]:
         """
         Scores current active incidents in each zone using the trained Isolation Forest model.
-        
+
+        NOTE: This method is kept for backward compatibility and direct use.
+        The primary call path now goes through routes/anomaly.py which pre-computes
+        a time-bucket matched window and calls _score_zone_from_slice() directly,
+        feeding per-day average counts to match the training feature scale.
+
+        When called directly (e.g., after a new incident submission), this method
+        uses resolution_minutes from the live_df rows (not elapsed time) to avoid
+        the variance that caused oscillating anomaly scores.
+
         Returns a list of reports per zone:
         [
           {
@@ -200,15 +209,21 @@ class TrafficAnomalyDetector:
         """
         if self.model is None or self.baseline_stats is None:
             raise ValueError("The anomaly detection model must be fitted or loaded before scoring live zones.")
-            
+
         if current_time is None:
             current_time = datetime.now()
         elif isinstance(current_time, str):
             current_time = pd.to_datetime(current_time)
-            
-        # Determine all zones present in baseline (excluding 'Unknown' fallback if possible)
+
+        # Determine all zones present in baseline (excluding 'Unknown' fallback)
         all_zones = [z for z in self.baseline_stats['zone_or_station'].unique() if z != 'Unknown']
-        
+
+        # Determine day_type and time_bucket of the current time
+        current_hour = current_time.hour
+        current_day_of_week = current_time.weekday()
+        day_type = self._get_day_type(current_day_of_week)
+        time_bucket = self._get_time_bucket(current_hour)
+
         # If there are no live incidents at all, score everything as Normal
         if live_df is None or len(live_df) == 0:
             return [
@@ -222,25 +237,25 @@ class TrafficAnomalyDetector:
                 }
                 for zone in all_zones
             ]
-            
-        # Prepare live dataframe
+
+        # Prepare live dataframe: add zone_or_station grouping column
         live_df = live_df.copy()
         zone_series = live_df['zone'] if 'zone' in live_df.columns else pd.Series(np.nan, index=live_df.index)
-        ps_series = live_df['police_station'] if 'police_station' in live_df.columns else pd.Series(np.nan, index=live_df.index)
+        ps_series   = live_df['police_station'] if 'police_station' in live_df.columns else pd.Series(np.nan, index=live_df.index)
         live_df['zone_or_station'] = zone_series.fillna(ps_series).fillna('Unknown')
-        
-        # Determine day_type and time_bucket of the current time
-        current_hour = current_time.hour
-        current_day_of_week = current_time.weekday()
-        day_type = self._get_day_type(current_day_of_week)
-        time_bucket = self._get_time_bucket(current_hour)
-        
+
+        # Pre-compute resolution_minutes if not already present.
+        # IMPORTANT: Only use historical closed/resolved durations — never use
+        # elapsed time since start, which introduces high variance and causes
+        # erratic anomaly scores.
+        if 'resolution_minutes' not in live_df.columns:
+            live_df['resolution_minutes'] = self._compute_resolution_minutes(live_df)
+
         results = []
         for zone in all_zones:
             zone_incidents = live_df[live_df['zone_or_station'] == zone]
             count = len(zone_incidents)
-            
-            # If no active incidents exist in the zone, it's considered normal
+
             if count == 0:
                 results.append({
                     "zone": zone,
@@ -251,41 +266,61 @@ class TrafficAnomalyDetector:
                     "anomaly_score": 0.1
                 })
                 continue
-                
-            # 1. High priority ratio
+
+            # --- 1. High priority ratio ---
             high_priority_count = zone_incidents['priority'].apply(
                 lambda p: 1 if str(p).strip().lower() == 'high' else 0
             ).sum()
             high_priority_ratio = high_priority_count / count
-            
-            # 2. Mean duration of active incidents
-            if 'estimated_duration_minutes' in zone_incidents.columns:
-                durations = zone_incidents['estimated_duration_minutes'].dropna()
-            elif 'resolution_minutes' in zone_incidents.columns:
-                durations = zone_incidents['resolution_minutes'].dropna()
+
+            # --- 2. Mean duration ---
+            # Priority order:
+            #   a) resolution_minutes column (historical, pre-computed)
+            #   b) estimated_duration_minutes (from prediction agent, for live submissions)
+            #   c) Baseline stats lookup for this (zone, day_type, time_bucket)
+            #
+            # We deliberately do NOT fall back to elapsed time since start.
+            # That calculation produces high-variance inputs that cause erratic scores.
+            mean_duration = self.overall_mean_duration  # safe default
+
+            # Try resolution_minutes first (historical)
+            if 'resolution_minutes' in zone_incidents.columns:
+                dur = zone_incidents['resolution_minutes'].dropna()
+                dur = dur[(dur > 0) & (dur <= 1440)]
+                if len(dur) > 0:
+                    mean_duration = float(dur.mean())
+
+            # Then estimated_duration_minutes (live submissions from prediction agent)
+            elif 'estimated_duration_minutes' in zone_incidents.columns:
+                dur = zone_incidents['estimated_duration_minutes'].dropna()
+                dur = dur[dur > 0]
+                if len(dur) > 0:
+                    mean_duration = float(dur.mean())
+
+            # Final fallback: look up baseline stats for this bucket
             else:
-                # Calculate elapsed time since start
-                start_times = pd.to_datetime(zone_incidents['start_datetime'], errors='coerce')
-                durations = (current_time - start_times).dt.total_seconds() / 60.0
-                durations = durations.dropna()
-                
-            mean_duration = durations.mean() if len(durations) > 0 else self.overall_mean_duration
-            
-            # Construct live 3D feature representation for this zone
+                bl = self.baseline_stats
+                mask = (
+                    (bl['zone_or_station'] == zone)
+                    & (bl['day_type'] == day_type)
+                    & (bl['time_bucket'] == time_bucket)
+                )
+                rows = bl[mask]
+                if len(rows) > 0:
+                    mean_duration = float(rows['mean_duration_minutes'].iloc[0])
+
+            # --- 3. Score with Isolation Forest ---
             X_live = np.array([[float(count), float(high_priority_ratio), float(mean_duration)]])
-            
-            # Predict anomaly score
             anomaly_score = float(self.model.decision_function(X_live)[0])
-            
-            # Map anomaly score to alert level:
-            # > 0 = Normal, -0.1 to 0 = Watch, < -0.1 = Critical
+
+            # Map to alert level (thresholds per AGENTS.md / architecture.md)
             if anomaly_score > 0.0:
                 alert_level = "Normal"
             elif anomaly_score >= -0.1:
                 alert_level = "Watch"
             else:
                 alert_level = "Critical"
-                
+
             results.append({
                 "zone": zone,
                 "alert_level": alert_level,
@@ -294,7 +329,7 @@ class TrafficAnomalyDetector:
                 "mean_duration": round(float(mean_duration), 1),
                 "anomaly_score": round(anomaly_score, 4)
             })
-            
+
         return results
 
     def save(self, filepath: str) -> None:

@@ -30,7 +30,7 @@ The following columns from the dataset are actually used:
 |---|---|
 | latitude, longitude | Map rendering, incident markers, heatmap weight |
 | event_type | ML input feature (binary: planned=1, unplanned=0) |
-| event_cause | ML input feature (one-hot encoded) |
+| event_cause | ML input feature (label encoded) |
 | requires_road_closure | ML input feature (binary) |
 | start_datetime | Feature extraction: hour of day, day of week, time bucket |
 | end_datetime | For planned events only: compute planned event duration in minutes as an additional input feature |
@@ -38,7 +38,7 @@ The following columns from the dataset are actually used:
 | resolved_datetime | Fallback source for resolution_minutes when closed_datetime is null. Present in ~74 records. |
 | authenticated | Quality filter — only authenticated=yes records are used for training |
 | description | Input to NLP parser |
-| veh_type | ML input feature (one-hot encoded, null-safe) |
+| veh_type | ML input feature (label encoded, returns -1 when unknown) |
 | corridor | ML input feature (ordinal encoded: named corridor=2, ORR variants=1, Non-corridor=0) |
 | priority | ML classification target (High / Low) |
 | police_station | Passed to action planner as context; used as grouping fallback for zone-null records in anomaly detection |
@@ -63,7 +63,7 @@ These features do not exist in the raw dataset and must be computed from what do
 - `planned_duration_minutes`: for planned events only, `end_datetime - start_datetime` in minutes. Set to null for unplanned events. Used as an optional feature in the regressor.
 - `hour_of_day`: integer 0–23, extracted from `start_datetime`.
 - `day_of_week`: integer 0–6, extracted from `start_datetime`.
-- `is_peak_hour`: 1 if `hour_of_day` is in [7, 8, 9, 17, 18, 19], else 0.
+- `is_peak_hour`: 1 if `hour_of_day` is in [7, 8, 9, 17, 18, 19, 20], else 0.
 - `is_weekend`: 1 if `day_of_week` is 5 or 6, else 0.
 - `corridor_rank`: ordinal integer. Any named major road corridor = 2, ORR variants (ORR East 1/2, ORR North 1/2, ORR West 1) = 1, Non-corridor = 0. The dataset contains 23 distinct corridor values; this encoding reduces them to three ordered levels. Null corridor values map to 0.
 - `junction_recurrence`: for each junction string in the dataset, count how many times it appears. This is a proxy for how congestion-prone that junction is historically. Computed once at training time. At inference time, a lookup table is used to find the value for the submitted junction, or 1 if the junction is new or null.
@@ -143,7 +143,7 @@ This agent runs only when the user has provided a free-text description. If the 
 
 Input: a raw string. This may be in Kannada script, broken English, mixed language, or any combination. Example: `"ಬಿಎಂಟಿಸಿ ಬಸ್ ಕೆಟ್ಟು ನಿಂತಿದೆ ಸರ್"` or `"pipe vehicle off aagide saro"`.
 
-What it does internally: the backend makes a single call to the Claude Sonnet API. The prompt contains a system instruction telling the model to act as a structured extraction agent for traffic incident descriptions, a few-shot example block showing one Kannada input and its expected JSON output, and the raw user description. The model is instructed to return only a JSON object with no explanation or prose.
+What it does internally: the backend makes a single call to the gemini flash API. The prompt contains a system instruction telling the model to act as a structured extraction agent for traffic incident descriptions, a few-shot example block showing one Kannada input and its expected JSON output, and the raw user description. The model is instructed to return only a JSON object with no explanation or prose.
 
 Output: a JSON object with five fields:
 - `root_cause`: one of the dataset's `event_cause` values — `vehicle_breakdown`, `tree_fall`, `accident`, `water_logging`, `pot_holes`, `construction`, `public_event`, `procession`, `vip_movement`, `protest`, `congestion`, `road_conditions`, or `others`
@@ -163,8 +163,8 @@ This agent always runs, for every incident submission and every map marker click
 Input: a feature vector constructed from either the user's form submission or a stored incident's fields. The features are:
 - `event_type` (binary: planned=1, unplanned=0)
 - `corridor_rank` (ordinal: 0, 1, or 2)
-- `event_cause` (one-hot encoded against the dataset's cause vocabulary)
-- `veh_type` (one-hot encoded, null-safe — all zeros when vehicle type is unknown)
+- `event_cause` (label encoded against the dataset's cause vocabulary)
+- `veh_type` (label encoded, returns -1 when vehicle type is unknown)
 - `requires_road_closure` (0 or 1)
 - `hour_of_day` (0–23)
 - `day_of_week` (0–6)
@@ -190,7 +190,7 @@ Output: a JSON object with four fields:
 
 ### Agent 3 — Anomaly Detection Agent (Isolation Forest)
 
-This agent runs on a schedule, not in response to user actions. It runs every 30 seconds and produces a score for each zone. It does not run per-incident — it runs per-zone.
+This agent runs on a schedule, not in response to user actions. It runs every 5 seconds and produces a score for each zone. It does not run per-incident — it runs per-zone.
 
 **Grouping strategy for null zones:** Records where zone is null are grouped by `police_station` for the purposes of this agent. This ensures that all 8,173 records contribute to the baseline, not just the 43% with a non-null zone.
 
@@ -211,13 +211,13 @@ Isolation Forest internally tries to isolate this point by making random splits 
 
 We convert this to a human-readable alert level: scores above 0 = Normal, 0 to -0.1 = Watch, below -0.1 = Critical. These thresholds are tuned by inspecting the score distribution across the dataset.
 
-The agent runs every 30 seconds during the demo by advancing the replay pointer by a configured number of hours, recomputing the three statistics for each zone at that simulated timestamp, feeding them to the trained model, and returning the scores. The frontend polls `/anomaly` every 30 seconds and updates the zone cards and map polygon colors.
+The agent runs every 0.066 seconds during the demo by streaming new incidents sequentially from the dataset into a pure per-zone accumulator (incidents are never removed; they only accumulate over time), computing the three statistics from the current accumulated state, feeding them to the trained model, and returning the scores. Once the dataset is exhausted, the replay loop stops and freezes at the final state. The frontend polls `/anomaly` every 5 seconds and updates the zone cards and map polygon colors.
 
 Output per zone: `{ zone, alert_level, incident_count, high_priority_ratio, mean_duration, anomaly_score }`.
 
 ### Agent 4 — Action Planner Agent (LLM)
 
-This agent runs after Agent 2 completes and produces the deployment-ready response plan. It uses the same Claude Sonnet API as Agent 1.
+This agent runs after Agent 2 completes and produces the deployment-ready response plan. It uses the same gemini flash API as Agent 1.
 
 Input: a context block assembled by the backend from Agent 2's output plus the original incident fields:
 - event type (planned or unplanned) and event cause
@@ -252,7 +252,8 @@ All endpoints are FastAPI. The dataset CSV is loaded into a pandas DataFrame at 
 | POST /nlp-parse | POST | Accepts `{description: string}`. Calls Agent 1. Returns the structured extraction JSON or null on failure. |
 | POST /predict | POST | Accepts the feature fields from the form or a stored incident. Runs Agent 2. Returns `{priority, confidence, estimated_duration_minutes, estimated_resolution_time}`. |
 | GET /action-plan | GET (SSE) | Accepts query params matching the full incident + prediction context. Calls Agent 4 and streams the response as Server-Sent Events. |
-| GET /anomaly | GET | Returns the current anomaly scores for all zones, updated every 30 seconds by the background replay loop. |
+| GET /anomaly | GET | Returns the current anomaly scores for all zones, updated every 0.066 seconds by the background replay loop. |
+| POST /anomaly/replay | POST | Resets the anomaly replay loop to the beginning of the dataset, clearing accumulators and starting the stream from index 0. |
 | GET /analytics | GET | Returns all four analytics datasets in a single response: the 7x24 incident volume grid, the top 15 junctions by count, the corridor-grouped median durations, and the planned vs unplanned monthly volume series. Computed once at startup from the in-memory DataFrame. |
 | POST /feedback | POST | Accepts `{incident_context: object, action_plan: string, rating: "up" or "down"}`. Appends the entry as a JSON line to a local `feedback.jsonl` file. Returns `{status: "ok"}`. |
 | GET /feedback | GET | Returns all entries from `feedback.jsonl` as a JSON array for post-demo review. |
@@ -274,7 +275,7 @@ That is seven endpoints. There is no `/simulate` endpoint — it does not need t
 7. Backend computes estimated_resolution_time as current_time + 130 minutes.
 8. Response arrives at the frontend. The Incident Panel opens. Priority badge and estimated clearance time are displayed immediately.
 9. Frontend calls GET /action-plan with the full context as query parameters.
-10. Backend constructs the prompt, calls Claude API with streaming enabled.
+10. Backend constructs the prompt, calls gemini API with streaming enabled.
 11. FastAPI streams SSE tokens to the frontend.
 12. The action plan types out in the Incident Panel over approximately 5–8 seconds.
 13. A new map marker is added at the user's dropped pin location, colored red (High).
@@ -285,7 +286,7 @@ That is seven endpoints. There is no `/simulate` endpoint — it does not need t
 1. User opens the form in View 2. They type a location address and paste the description: `"ಬಿಎಂಟಿಸಿ ಬಸ್ ಕೆಟ್ಟು ನಿಂತಿದೆ ಸರ್"`. They leave event type and vehicle type blank.
 2. User clicks Submit.
 3. Frontend detects a non-empty description and calls POST /nlp-parse first.
-4. NLP Agent calls Claude API, receives the structured extraction.
+4. NLP Agent calls gemini API, receives the structured extraction.
 5. Frontend shows the "Parsed from description" section in the Incident Panel: root_cause=vehicle_breakdown, vehicle_type=bmtc_bus, severity=2, normalized_summary="BMTC bus has broken down at the reported location."
 6. Frontend merges the NLP output with the user's typed location and calls POST /predict.
 7. Steps 4–14 from Journey 1 apply from here.
@@ -308,7 +309,7 @@ The following items from the original plan are not in this specification. Each r
 
 "Incident density within 1km radius as a training feature" — replaced with junction_recurrence. Computing a 1km radius count at inference time requires a spatial index and adds latency. Junction recurrence achieves the same goal — flagging historically congestion-prone locations — with a simple dictionary lookup.
 
-"IndicBERT for multilingual NLP" — replaced with Claude API. IndicBERT requires a hosted model, an inference API wrapper, and tokenizer setup. The Claude API achieves better zero-shot extraction quality on mixed-script text with a single function call and returns structured JSON without a separate parsing layer.
+"IndicBERT for multilingual NLP" — replaced with gemini API. IndicBERT requires a hosted model, an inference API wrapper, and tokenizer setup. The gemini API achieves better zero-shot extraction quality on mixed-script text with a single function call and returns structured JSON without a separate parsing layer.
 
 "LangChain" — not used. The agent pipeline here is four sequential function calls. An orchestration framework is not needed and would add dependency overhead.
 
@@ -330,10 +331,11 @@ Write the NLP parser prompt and `POST /nlp-parse`. Test it against five real des
 
 **Stage 3 — Frontend core**
 
-Set up the Leaflet map. Integrate the heatmap plugin. Build zone polygons as convex hulls of the lat/lng points grouped by zone (computed from the dataset). Build the Anomaly Monitor sidebar polling `GET /anomaly` every 30 seconds. Build the Incident Panel drawer with three states: loading prediction, prediction loaded and action plan streaming, complete. Wire up map marker click.
+Set up the Leaflet map. Integrate the heatmap plugin. Build zone polygons as convex hulls of the lat/lng points grouped by zone (computed from the dataset). Build the Anomaly Monitor sidebar polling `GET /anomaly` every 5 seconds. Build the Incident Panel drawer with three states: loading prediction, prediction loaded and action plan streaming, complete. Wire up map marker click.
 
 **Stage 4 — Frontend form, analytics, polish**
 
 Build the Submit Incident form with both input modes. Wire the three-step API sequence: `/nlp-parse` (if description), then `/predict`, then `/action-plan` as SSE. Build the Analytics page with all four Recharts charts. Wire the junction bar click to pan the map. Wire the feedback thumbs-up / thumbs-down buttons in the Incident Panel to `POST /feedback` — the buttons should only appear after the action plan finishes streaming, not during. Add loading skeletons and error handling throughout.
 
 Now once this is understood go to @architecture.md to understand how everything is handled, whats the type, the requirement everything.
+Also go through @MODELS.md to understand the main prediction models and how they expect input and output

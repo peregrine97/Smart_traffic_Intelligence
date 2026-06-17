@@ -146,18 +146,16 @@ async def startup_event() -> None:
             logger.info("Anomaly detector loaded from %s.", anomaly_model_path)
         except Exception as exc:
             logger.warning(
-                "Could not load anomaly detector from disk (%s). "
-                "Will fit on dataset at startup instead.",
+                "WARNING: Could not load anomaly detector from disk (%s). "
+                "Model is not loaded. Please train the model first.",
                 exc,
             )
-            _fit_anomaly_detector(anomaly_detector)
     else:
         logger.warning(
-            "anomaly_detector.joblib not found at %s — fitting on live dataset. "
-            "This is expected when models haven't been trained yet.",
+            "WARNING: anomaly_detector.joblib not found at %s. "
+            "Model is not loaded. Please train the model first.",
             anomaly_model_path,
         )
-        _fit_anomaly_detector(anomaly_detector)
 
     init_anomaly_detector(anomaly_detector)
     logger.info("Agent 3 ready.")
@@ -177,22 +175,7 @@ async def startup_event() -> None:
     logger.info("=== All agents initialised — server ready ===")
 
 
-def _fit_anomaly_detector(detector: TrafficAnomalyDetector) -> None:
-    """
-    Fit the anomaly detector on the in-memory dataset.
-    Called when the pre-trained .joblib file is not available.
-    """
-    try:
-        df = get_dataframe()
-        logger.info("Fitting anomaly detector on %d records …", len(df))
-        detector.fit(df)
-        logger.info("Anomaly detector fitted successfully.")
-    except Exception as exc:
-        logger.error(
-            "Failed to fit anomaly detector: %s. "
-            "Anomaly scoring will return placeholder results.",
-            exc,
-        )
+
 
 
 # ---------------------------------------------------------------------------

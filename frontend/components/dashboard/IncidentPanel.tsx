@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { X, ThumbsUp, ThumbsDown, ShieldWarning, Clock, Info } from '@phosphor-icons/react';
-import { getActionPlanEventSource, submitFeedback } from '../../lib/api';
+import { streamActionPlan, submitFeedback } from '../../lib/api';
 
 interface IncidentPanelProps {
     isOpen: boolean;
@@ -11,6 +11,7 @@ interface IncidentPanelProps {
 export default function IncidentPanel({ isOpen, onClose, data }: IncidentPanelProps) {
     const [actionPlan, setActionPlan] = useState<string>('');
     const [isStreaming, setIsStreaming] = useState(false);
+    const [streamError, setStreamError] = useState<string | null>(null);
     const [feedbackStatus, setFeedbackStatus] = useState<'none' | 'submitting' | 'submitted'>('none');
     const [selectedFeedback, setSelectedFeedback] = useState<'up' | 'down' | null>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -19,6 +20,7 @@ export default function IncidentPanel({ isOpen, onClose, data }: IncidentPanelPr
         if (!isOpen || !data) {
             setActionPlan('');
             setIsStreaming(false);
+            setStreamError(null);
             setFeedbackStatus('none');
             setSelectedFeedback(null);
             return;
@@ -28,46 +30,45 @@ export default function IncidentPanel({ isOpen, onClose, data }: IncidentPanelPr
         if (data.priority) {
             setIsStreaming(true);
             setActionPlan('');
-            
-            // Reconstruct features for the action plan query
-            const queryParams = { ...data };
-            // remove objects that can't be easily sent via query string, or serialize them
-            if (queryParams.nlpResult) delete queryParams.nlpResult;
+            setStreamError(null);
 
-            const eventSource = getActionPlanEventSource(queryParams);
-            
-            eventSource.onmessage = (event) => {
-                if (event.data === '[DONE]') {
-                    eventSource.close();
-                    setIsStreaming(false);
-                } else {
-                    try {
-                        const parsed = JSON.parse(event.data);
-                        // Depending on the SSE format. Assuming it sends a token string.
-                        // Wait, AGENTS.md says "streamed token-by-token from the API using Server-Sent Events"
-                        // Usually it's either text chunks or JSON objects. Let's assume parsed text or direct data
-                        if (parsed.text) {
-                            setActionPlan(prev => prev + parsed.text);
-                        } else if (parsed.content) {
-                             setActionPlan(prev => prev + parsed.content);
-                        } else {
-                             setActionPlan(prev => prev + event.data.replace(/"/g, ''));
-                        }
-                    } catch {
-                        // If it's not JSON, just append the raw data
-                        setActionPlan(prev => prev + event.data);
+            // Build the POST body. Exclude UI-only fields that the backend
+            // does not expect (nlpResult is a frontend-only enrichment object).
+            const { nlpResult, ...rest } = data;
+            const body: Record<string, any> = { ...rest };
+
+            // Pass NLP fields as flat strings if the parse result is available.
+            if (nlpResult) {
+                body.nlp_cause    = nlpResult.root_cause   ?? '';
+                body.nlp_summary  = nlpResult.normalized_summary ?? '';
+            }
+
+            // AbortController lets us cleanly cancel the in-flight fetch when
+            // the panel closes or the effect re-runs, without leaking the stream.
+            const controller = new AbortController();
+
+            streamActionPlan(
+                body,
+                (token) => {
+                    // Intercept WARNING tokens from the backend — they must not
+                    // be rendered inline in the action plan (no key leak risk).
+                    if (token.startsWith('WARNING:')) {
+                        setStreamError('The AI action planner is currently unavailable. Please check the backend configuration.');
+                        setIsStreaming(false);
+                    } else {
+                        setActionPlan(prev => prev + token);
                     }
-                }
-            };
-
-            eventSource.onerror = () => {
-                console.error("EventSource failed.");
-                eventSource.close();
-                setIsStreaming(false);
-            };
+                },
+                ()      => setIsStreaming(false),
+                (err)   => {
+                    console.error('Action plan stream error:', err);
+                    setIsStreaming(false);
+                },
+                controller.signal,
+            );
 
             return () => {
-                eventSource.close();
+                controller.abort();
             };
         }
     }, [isOpen, data]);
@@ -180,9 +181,15 @@ export default function IncidentPanel({ isOpen, onClose, data }: IncidentPanelPr
                 {data.priority && (
                     <div className="neo-brutal-box p-4 bg-white relative">
                         <h3 className="font-mono font-bold uppercase mb-3 border-b-2 border-neo-border pb-2">Action Plan</h3>
-                        <div className="font-mono text-sm leading-relaxed whitespace-pre-wrap min-h-[150px]">
-                            {actionPlan || <span className="animate-pulse">Waiting for AI to generate plan...</span>}
-                        </div>
+                        {streamError ? (
+                            <div className="p-3 bg-amber-100 border-2 border-amber-400 font-mono text-sm text-amber-800">
+                                ⚠ {streamError}
+                            </div>
+                        ) : (
+                            <div className="font-mono text-sm leading-relaxed whitespace-pre-wrap min-h-[150px]">
+                                {actionPlan || <span className="animate-pulse">Waiting for AI to generate plan...</span>}
+                            </div>
+                        )}
                         {isStreaming && (
                             <div className="absolute bottom-2 right-4 text-xs font-mono font-bold text-neo-primary bg-neo-text px-2 py-1">
                                 STREAMING...

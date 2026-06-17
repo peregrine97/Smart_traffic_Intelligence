@@ -8,8 +8,11 @@ uvicorn[standard]>=0.29.0
 # ── Data & ML ──────────────────────────────────────────────────────────────
 pandas>=2.0.0
 numpy>=1.26.0
-scikit-learn>=1.4.0
+scikit-learn==1.8.0
 joblib>=1.4.0
+pyarrow>=15.0.0
+# xgboost must be explicitly listed to ensure compatibility with model inference modules
+xgboost>=2.0.0
 
 # ── HTTP (NLP parser + action planner Gemini calls) ───────────────────────
 requests>=2.31.0

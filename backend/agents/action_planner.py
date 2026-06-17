@@ -1,11 +1,25 @@
 import os
 import json
 import logging
+import re
 from typing import AsyncGenerator, Dict, Any
+from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+
+def sanitize_url(url: str) -> str:
+    """Redacts the 'key' query parameter from a URL to prevent leaks."""
+    try:
+        parsed = urlparse(url)
+        queries = parse_qsl(parsed.query)
+        redacted_queries = [(k, '[REDACTED]' if k == 'key' else v) for k, v in queries]
+        new_query = urlencode(redacted_queries)
+        return urlunparse(parsed._replace(query=new_query))
+    except Exception:
+        return "[REDACTED_URL]"
 
 
 class ActionPlannerAgent:
@@ -21,7 +35,7 @@ class ActionPlannerAgent:
 
     def __init__(self, api_key: str = None):
         self.gemini_key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        self.model_name = "gemini-1.5-flash"
+        self.model_name = "gemini-2.5-flash"
         self.base_url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
             f"{self.model_name}:streamGenerateContent"
@@ -124,9 +138,9 @@ class ActionPlannerAgent:
         user_prompt = self._build_user_prompt(params)
 
         if not self.gemini_key:
-            logger.warning("No Gemini API key — streaming fallback plan.")
-            async for chunk in self._fallback_stream(user_prompt):
-                yield chunk
+            logger.warning("WARNING: No Gemini API key found. Model not loaded.")
+            yield "data: WARNING: API key not found. Action Planner model is not loaded.\n\n"
+            yield "data: [DONE]\n\n"
             return
 
         url = f"{self.base_url}?key={self.gemini_key}&alt=sse"
@@ -172,10 +186,20 @@ class ActionPlannerAgent:
                         except (json.JSONDecodeError, KeyError):
                             continue
 
+        except requests.exceptions.HTTPError as exc:
+            status_code = exc.response.status_code if exc.response is not None else "Unknown"
+            reason = exc.response.reason if exc.response is not None else "Error"
+            safe_url = sanitize_url(exc.request.url) if (exc.request and exc.request.url) else "URL"
+            safe_err = f"{status_code} Client Error: {reason} for url: {safe_url}"
+            logger.error("Gemini streaming error: %s", safe_err)
+            yield f"data: WARNING: API call failed ({safe_err}). Action Planner model is not loaded.\n\n"
+            yield "data: [DONE]\n\n"
+            return
         except Exception as exc:
-            logger.exception("Gemini streaming error: %s", exc)
-            async for chunk in self._fallback_stream(user_prompt):
-                yield chunk
+            safe_err = re.sub(r'([?&]key=)[^&\s"\']+', r'\1[REDACTED]', str(exc))
+            logger.error("Gemini streaming error: %s", safe_err)
+            yield f"data: WARNING: API call failed ({safe_err}). Action Planner model is not loaded.\n\n"
+            yield "data: [DONE]\n\n"
             return
 
         yield "data: [DONE]\n\n"

@@ -26,19 +26,25 @@ export default function SubmitIncidentView({ onOpenPanel }: SubmitIncidentViewPr
         setError(null);
 
         try {
+            // Map corridor rank selector value to a corridor name string.
+            // The backend derives corridor_rank from the corridor name internally.
+            const corridorNames: Record<string, string> = {
+                '0': 'Non-corridor',
+                '1': 'ORR East 1',
+                '2': 'Hosur Road',
+            };
+
+            const eventTypeStr = eventType === '1' ? 'planned' : 'unplanned';
+
             let features: any = {
-                event_type: parseInt(eventType),
-                corridor_rank: parseInt(corridorRank),
+                event_type: eventTypeStr,
+                corridor: corridorNames[corridorRank] || 'Non-corridor',
                 event_cause: eventCause,
                 veh_type: vehType,
-                requires_road_closure: 0,
-                hour_of_day: new Date().getHours(),
-                day_of_week: new Date().getDay(),
-                is_peak_hour: 1, // simplified
-                is_weekend: 0, // simplified
-                zone: zone || 'Unknown',
-                junction_recurrence: 1,
-                planned_duration_minutes: 0
+                requires_road_closure: false,
+                start_datetime: new Date().toISOString(),
+                zone: zone || undefined,
+                planned_duration_minutes: eventTypeStr === 'planned' ? 60 : 0,
             };
 
             let nlpResult = null;
@@ -66,7 +72,10 @@ export default function SubmitIncidentView({ onOpenPanel }: SubmitIncidentViewPr
             onOpenPanel({
                 ...features,
                 ...prediction,
-                nlpResult, // Pass the NLP result to display in the panel
+                nlpResult,       // Pass the NLP result to display in the panel
+                // Ensure string event_type is preserved for the action planner
+                event_type: eventTypeStr,
+                event_cause: features.event_cause,
             });
             
             // Clear form

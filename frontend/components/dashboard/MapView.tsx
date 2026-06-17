@@ -5,8 +5,8 @@ import 'leaflet-defaulticon-compatibility';
 import 'leaflet-defaulticon-compatibility/dist/leaflet-defaulticon-compatibility.css';
 import L from 'leaflet';
 import 'leaflet.heat';
-import { fetchHeatmap, fetchIncidents, fetchAnomalyScores, predictIncident } from '../../lib/api';
-import { WarningCircle, Lightning, ArrowRight, ListDashes, X } from '@phosphor-icons/react';
+import { fetchHeatmap, fetchIncidents, fetchAnomalyScores, predictIncident, resetAnomalyReplay } from '../../lib/api';
+import { WarningCircle, Lightning, ArrowRight, ListDashes, X, ArrowsClockwise } from '@phosphor-icons/react';
 
 // --- Heatmap Layer Component ---
 function HeatmapLayer({ points }: { points: Array<[number, number, number]> }) {
@@ -49,6 +49,7 @@ export default function MapView({ onOpenPanel }: MapViewProps) {
     const [anomalies, setAnomalies] = useState<any[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [isAnomalyModalOpen, setIsAnomalyModalOpen] = useState(false);
+    const [replayCounter, setReplayCounter] = useState(0);
 
     const bglrCenter: [number, number] = [12.9716, 77.5946];
 
@@ -56,10 +57,9 @@ export default function MapView({ onOpenPanel }: MapViewProps) {
         const loadData = async () => {
             setIsLoading(true);
             try {
-                const [heatRes, incRes, anomRes] = await Promise.all([
+                const [heatRes, incRes] = await Promise.all([
                     fetchHeatmap(),
-                    fetchIncidents(),
-                    fetchAnomalyScores()
+                    fetchIncidents()
                 ]);
                 
                 if (heatRes && Array.isArray(heatRes)) {
@@ -69,11 +69,6 @@ export default function MapView({ onOpenPanel }: MapViewProps) {
                 if (incRes && Array.isArray(incRes)) {
                     setIncidents(incRes.slice(0, 500)); // Limit to 500 for perf if needed
                 }
-
-                if (anomRes && Array.isArray(anomRes)) {
-                    setAnomalies(anomRes);
-                }
-
             } catch (err) {
                 console.error("Error loading map data", err);
             } finally {
@@ -82,33 +77,38 @@ export default function MapView({ onOpenPanel }: MapViewProps) {
         };
 
         loadData();
-        
-        // Polling for anomalies every 5s as per AGENTS.md
-        const interval = setInterval(async () => {
+    }, []);
+
+    // Anomaly polling - depends on replayCounter to reset timer on restart
+    useEffect(() => {
+        const fetchScores = async () => {
             const anomRes = await fetchAnomalyScores();
             if (anomRes && Array.isArray(anomRes)) {
                 setAnomalies(anomRes);
             }
-        }, 5000);
+        };
 
+        fetchScores();
+        
+        const interval = setInterval(fetchScores, 5000);
         return () => clearInterval(interval);
-    }, []);
+    }, [replayCounter]);
 
     const handleIncidentClick = async (incident: any) => {
-        // According to AGENTS.md, clicking a map marker opens Incident Panel and runs prediction fresh
+        // According to AGENTS.md, clicking a map marker opens Incident Panel and runs prediction fresh.
+        // Send fields the PredictRequest schema accepts — backend derives corridor_rank internally.
         const features = {
-            event_type: incident.event_type,
-            corridor_rank: incident.corridor === 'Non-corridor' ? 0 : 1, // simplified
+            event_type: incident.event_type === 1 || incident.event_type === 'planned' ? 'planned' : 'unplanned',
+            corridor: incident.corridor || 'Non-corridor',
             event_cause: incident.event_cause,
             veh_type: incident.veh_type,
-            requires_road_closure: incident.requires_road_closure ? 1 : 0,
-            hour_of_day: new Date().getHours(),
-            day_of_week: new Date().getDay(),
-            is_peak_hour: 1, // mock
-            is_weekend: 0, // mock
-            zone: incident.zone,
-            junction_recurrence: incident.junction_recurrence || 1,
-            planned_duration_minutes: 0
+            requires_road_closure: Boolean(incident.requires_road_closure),
+            start_datetime: incident.start_datetime || new Date().toISOString(),
+            zone: incident.zone || undefined,
+            junction: incident.junction || undefined,
+            planned_duration_minutes: 0,
+            address: incident.address,
+            police_station: incident.police_station,
         };
 
         // predict (Agent 2)
@@ -116,26 +116,33 @@ export default function MapView({ onOpenPanel }: MapViewProps) {
         
         onOpenPanel({
             ...incident,
-            ...prediction
+            ...prediction,
+            // Preserve string event_type for the action planner
+            event_type: features.event_type,
         });
     };
 
     const handleAnomalyPlanClick = async (zoneData: any) => {
-        // Trigger prediction for anomaly zone context
-        const mockFeatures = {
-            zone: zoneData.zone,
-            event_type: 'anomaly_alert',
-            hour_of_day: new Date().getHours()
+        // Trigger prediction for anomaly zone context.
+        // Use 'unplanned' as event_type (valid enum value) and mark is_zone_alert
+        // so the action planner frames the plan as a zone-level pre-emptive response.
+        const zoneFeatures = {
+            event_type: 'unplanned',
+            event_cause: 'congestion',
+            zone: zoneData.zone || undefined,
+            start_datetime: new Date().toISOString(),
         };
-        const prediction = await predictIncident(mockFeatures);
+        const prediction = await predictIncident(zoneFeatures);
 
         onOpenPanel({
             zone: zoneData.zone,
-            event_cause: 'Multiple Anomalies Detected',
-            event_type: 'Unplanned',
+            event_cause: 'congestion',
+            event_type: 'unplanned',
+            is_zone_alert: true,
             ...prediction,
-            priority: zoneData.alert_level === 'Critical' ? 'High' : 'Low', // Override with anomaly level
-            confidence: Math.abs(zoneData.anomaly_score)
+            // Override priority with the anomaly alert level
+            priority: zoneData.alert_level === 'Critical' ? 'High' : 'Low',
+            confidence: Math.abs(zoneData.anomaly_score ?? 0),
         });
     };
 
@@ -174,17 +181,34 @@ export default function MapView({ onOpenPanel }: MapViewProps) {
                         onClick={(e) => e.stopPropagation()}
                     >
                         {/* Modal Header */}
-                        <div className="flex justify-between items-center p-4 border-b-4 border-neo-border bg-neo-primary">
+                        <div className="flex justify-between items-center p-4 border-b-4 border-neo-border bg-neo-primary flex-wrap gap-2">
                             <h2 className="font-mono text-xl font-bold uppercase flex items-center gap-2">
                                 <WarningCircle size={24} weight="bold" />
                                 Active Anomalies
                             </h2>
-                            <button 
-                                onClick={() => setIsAnomalyModalOpen(false)}
-                                className="p-1 border-2 border-neo-border bg-white hover:bg-neo-secondary transition-colors"
-                            >
-                                <X size={20} weight="bold" />
-                            </button>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={async () => {
+                                        const resetState = await resetAnomalyReplay();
+                                        if (resetState && Array.isArray(resetState)) {
+                                            setAnomalies(resetState);
+                                            setReplayCounter(c => c + 1); // Reset the 5s polling timer
+                                        }
+                                    }}
+                                    className="px-3 py-1 text-sm font-bold border-2 border-neo-border bg-white hover:bg-neo-secondary transition-colors flex items-center gap-2 uppercase"
+                                    title="Restart the simulation replay from the beginning"
+                                >
+                                    <ArrowsClockwise size={16} weight="bold" />
+                                    Replay
+                                </button>
+                                <button 
+                                    onClick={() => setIsAnomalyModalOpen(false)}
+                                    className="p-1 border-2 border-neo-border bg-white hover:bg-neo-secondary transition-colors"
+                                    title="Close"
+                                >
+                                    <X size={20} weight="bold" />
+                                </button>
+                            </div>
                         </div>
                         
                         {/* Modal Body */}

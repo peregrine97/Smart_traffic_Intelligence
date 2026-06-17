@@ -1,10 +1,26 @@
 import os
 import json
 import logging
-import requests
+import re
 from typing import Dict, Any, Optional
+from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+
+import requests
 
 logger = logging.getLogger(__name__)
+
+
+def sanitize_url(url: str) -> str:
+    """Redacts the 'key' query parameter from a URL to prevent leaks."""
+    try:
+        parsed = urlparse(url)
+        queries = parse_qsl(parsed.query)
+        redacted_queries = [(k, '[REDACTED]' if k == 'key' else v) for k, v in queries]
+        new_query = urlencode(redacted_queries)
+        return urlunparse(parsed._replace(query=new_query))
+    except Exception:
+        return "[REDACTED_URL]"
+
 
 class NLPIncidentParser:
     """
@@ -131,8 +147,8 @@ If you cannot parse the incident or if the text is completely irrelevant to traf
         """
         Internal helper to parse description using Google Gemini REST API.
         """
-        # Using gemini-1.5-flash which is standard and fast
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.gemini_key}"
+        # Using gemini-2.5-flash which is standard and fast
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={self.gemini_key}"
         headers = {"Content-Type": "application/json"}
         payload = {
             "contents": [
@@ -178,17 +194,28 @@ If you cannot parse the incident or if the text is completely irrelevant to traf
     def parse_description(self, description: str) -> Optional[Dict[str, Any]]:
         """
         Sends the incident description to Google Gemini for parsing.
-        Falls back to heuristics if API key is not configured or an error occurs.
+        Logs an explicit warning and returns None if the API key is not configured
+        or an error occurs, rather than falling back to heuristics.
         """
         if not description or not description.strip():
             return None
 
-        # 1. Attempt Google Gemini if API key is available
-        if self.gemini_key:
-            try:
-                return self._parse_with_gemini(description)
-            except Exception as e:
-                logger.error(f"Gemini parsing failed: {e}. Falling back to heuristics.")
+        # 1. Check for API key
+        if not self.gemini_key:
+            logger.warning("WARNING: No Gemini API key found. NLP parser model is not loaded.")
+            return None
 
-        # 2. Heuristic fallback
-        return self.parse_with_heuristics(description)
+        # 2. Attempt Google Gemini
+        try:
+            return self._parse_with_gemini(description)
+        except requests.exceptions.HTTPError as exc:
+            status_code = exc.response.status_code if exc.response is not None else "Unknown"
+            reason = exc.response.reason if exc.response is not None else "Error"
+            safe_url = sanitize_url(exc.request.url) if (exc.request and exc.request.url) else "URL"
+            safe_err = f"{status_code} Client Error: {reason} for url: {safe_url}"
+            logger.error(f"WARNING: Gemini parsing failed ({safe_err}). NLP parser model is not loaded.")
+            return None
+        except Exception as e:
+            safe_err = re.sub(r'([?&]key=)[^&\s"\']+', r'\1[REDACTED]', str(e))
+            logger.error(f"WARNING: Gemini parsing failed ({safe_err}). NLP parser model is not loaded.")
+            return None

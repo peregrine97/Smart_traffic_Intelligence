@@ -1,13 +1,13 @@
 """
 Route: POST /predict
 
-Consumes PredictionAgent (Agent 2) to classify an incident's priority and
-estimate its resolution duration.  This endpoint is called from three places
+Consumes PredictionAgent (Agent 2) to classify an incident priority and
+estimate its resolution duration. This endpoint is called from three places
 in the frontend:
 
-1. When the user clicks a map marker → historical incident fields are sent.
-2. When the user submits the incident form (View 2) → user-supplied fields.
-3. When "Generate Plan" is clicked on an anomaly zone card → zone-level
+1. When the user clicks a map marker -> historical incident fields are sent.
+2. When the user submits the incident form (View 2) -> user-supplied fields.
+3. When "Generate Plan" is clicked on an anomaly zone card -> zone-level
    context is sent.
 
 Request body matches the raw incident dict expected by
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
-# Request schema — mirrors the incident fields documented in AGENTS.md §6
+# Request schema -- mirrors the incident fields documented in AGENTS.md section 6
 # ---------------------------------------------------------------------------
 
 
@@ -49,8 +49,12 @@ class PredictRequest(BaseModel):
 
     All fields are optional because different callers supply different
     subsets (map markers have full data; form submissions may omit zone;
-    anomaly cards have no junction).  The PredictionAgent handles defaults
+    anomaly cards have no junction). The PredictionAgent handles defaults
     internally.
+
+    lat / lng are included so that live-submitted incidents land at the
+    correct coordinates on the heatmap and map markers, not pinned to the
+    city centre (which was the previous behaviour when these were absent).
     """
 
     event_type: Optional[str] = Field(
@@ -94,14 +98,36 @@ class PredictRequest(BaseModel):
         None,
         description=(
             "For planned events only: duration in minutes derived from "
-            "end_datetime − start_datetime.  Null/0 for unplanned."
+            "end_datetime - start_datetime. Null/0 for unplanned."
         ),
+    )
+    # Location fields -- used to pin live-submitted incidents at the correct
+    # map coordinates. When absent, the incident is placed at the city centre.
+    lat: Optional[float] = Field(
+        None,
+        description="Latitude of the incident location.",
+        examples=[12.9352],
+    )
+    lng: Optional[float] = Field(
+        None,
+        description="Longitude of the incident location.",
+        examples=[77.6245],
+    )
+    # Display-only fields -- passed through to add_live_incident() so the
+    # Incident Panel can show the correct address and responsible station.
+    address: Optional[str] = Field(
+        None,
+        description="Human-readable address of the incident location.",
+    )
+    police_station: Optional[str] = Field(
+        None,
+        description="Responsible police station for this area.",
     )
 
 
 class PredictResponse(BaseModel):
     """
-    Standard prediction response — matches the API contract in AGENTS.md §7.
+    Standard prediction response -- matches the API contract in AGENTS.md section 7.
     """
 
     priority: str = Field(
@@ -110,7 +136,7 @@ class PredictResponse(BaseModel):
     )
     confidence: float = Field(
         ...,
-        description="Classifier probability for the predicted class (0–1).",
+        description="Classifier probability for the predicted class (0-1).",
     )
     estimated_duration_minutes: int = Field(
         ...,
@@ -123,14 +149,14 @@ class PredictResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Singleton agent instance — initialised by main.py at startup
+# Singleton agent instance -- initialised by main.py at startup
 # ---------------------------------------------------------------------------
 _agent: Optional[PredictionAgent] = None
 
 
 def init_prediction_agent(agent: PredictionAgent) -> None:
     """
-    Called once from ``main.py`` during application startup to inject the
+    Called once from main.py during application startup to inject the
     loaded PredictionAgent singleton into this route module.
     """
     global _agent
@@ -153,6 +179,11 @@ async def predict_incident(request: PredictRequest) -> PredictResponse:
     """
     Accepts incident fields, runs Agent 2 (priority classifier + duration
     regressor), and returns the prediction result.
+
+    Also appends the new incident to the in-memory dataset via
+    add_live_incident() so the anomaly detector and heatmap immediately
+    reflect the submission. The lat/lng fields ensure the new map pin
+    appears at the correct location rather than the city centre.
     """
     if _agent is None:
         raise HTTPException(
@@ -161,13 +192,13 @@ async def predict_incident(request: PredictRequest) -> PredictResponse:
         )
 
     try:
-        # Convert Pydantic model → plain dict for the agent
+        # Convert Pydantic model -> plain dict for the agent
         incident_data = request.model_dump(exclude_none=False)
 
         result = _agent.predict_incident(incident_data)
 
         # Append the new incident + prediction to the live dataset so
-        # the map and anomaly detector instantly see it!
+        # the map and anomaly detector instantly see it.
         add_live_incident(incident_data, result)
 
         return PredictResponse(**result)

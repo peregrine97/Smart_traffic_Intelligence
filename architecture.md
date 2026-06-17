@@ -216,7 +216,7 @@ For planned events (`event_type == "planned"`), the prompt instructs pre-emptive
 
 ### `GET /anomaly`
 
-**Purpose:** Return current anomaly scores for all zones, updated every 30 seconds by the background replay loop.
+**Purpose:** Return current anomaly scores for all zones, updated every 0.066 seconds by the background replay loop.
 
 **Input:** None.
 
@@ -237,7 +237,13 @@ For planned events (`event_type == "planned"`), the prompt instructs pre-emptive
 
 Alert level thresholds: `anomaly_score > 0` = Normal, `-0.1 to 0` = Watch, `< -0.1` = Critical.
 
-Frontend polls this endpoint every 30 seconds and simultaneously updates zone polygon fill colors on the map and badge colors on the Anomaly Monitor sidebar cards.
+Frontend polls this endpoint every 5 seconds and simultaneously updates zone polygon fill colors on the map and badge colors on the Anomaly Monitor sidebar cards.
+
+---
+
+### `POST /anomaly/replay`
+
+**Purpose:** Resets the anomaly replay loop to the beginning of the dataset, clearing accumulators and starting the stream from index 0.
 
 ---
 
@@ -349,8 +355,8 @@ All agents are Python functions inside the FastAPI backend — not separate serv
 |---|---|
 | `event_type` | Binary: planned=1, unplanned=0 |
 | `corridor_rank` | Ordinal: named=2, ORR=1, non-corridor=0 |
-| `event_cause` | One-hot (dataset vocabulary) |
-| `veh_type` | One-hot, null-safe (all-zeros when unknown) |
+| `event_cause` | Label encoded |
+| `veh_type` | Label encoded (returns -1 when unknown) |
 | `requires_road_closure` | Binary: 0 or 1 |
 | `hour_of_day` | Integer 0–23 |
 | `day_of_week` | Integer 0–6 |
@@ -382,7 +388,7 @@ Models are serialized with joblib and loaded at server startup. Inference: < 100
 
 ### Agent 3 — Anomaly Detection Agent (Isolation Forest)
 
-**Triggered by:** Background `asyncio` task running every 30 seconds during the demo. Not triggered by user actions directly.
+**Triggered by:** Background `asyncio` task running every 5 seconds during the demo. Not triggered by user actions directly.
 
 **Grouping:** Records where `zone` is null are grouped by `police_station` instead, ensuring all 8,173 records contribute to the baseline.
 
@@ -393,7 +399,7 @@ Models are serialized with joblib and loaded at server startup. Inference: < 100
 
 Each combination becomes one row (a 3D feature vector). The Isolation Forest is trained on all rows.
 
-**Replay mechanism:** During the demo, the backend advances a chronological pointer through the dataset every 30 seconds. For the simulated "current moment," the three statistics are recomputed per zone and fed to the Isolation Forest.
+**Replay mechanism:** During the demo, the backend streams a small batch of chronological incidents every 0.066 seconds into a pure per-zone accumulator (incidents are never removed; they only accumulate over time). The three statistics are computed from this ever-growing accumulated state per zone and fed to the Isolation Forest. When the dataset is exhausted, the replay loop stops and freezes at the final state.
 
 **Output per zone:**
 ```json
@@ -471,7 +477,7 @@ Streaming complete → feedback buttons appear
     │
     ▼ (on map)
 New red/amber pin added at submitted location
-Zone anomaly score recomputed immediately (not waiting for 30s cycle)
+Zone anomaly score recomputed immediately (not waiting for 5s cycle)
 ```
 
 ### Flow B — Free-Text Description Submission
@@ -502,13 +508,13 @@ POST /predict → GET /action-plan SSE → streaming → feedback buttons
 ### Flow C — Anomaly Monitor → Generate Plan
 
 ```
-Background task (every 30s):
-    replay pointer advances
-    → recompute (incident_count, high_priority_ratio, mean_duration) per zone
+Background task (every 0.066s):
+    incidents stream into pure per-zone accumulator (never removed)
+    → compute (incident_count, high_priority_ratio, mean_duration) from accumulated state
     → Isolation Forest scores all zones
     → GET /anomaly cache updated
 
-Frontend polls GET /anomaly every 30s:
+Frontend polls GET /anomaly every 5s:
     → Zone polygon fill colors updated on map
     → Anomaly Monitor sidebar cards updated
 
@@ -552,7 +558,7 @@ Incident Panel opens with historical incident's address/junction + fresh predict
 **API calls on load:**
 1. `GET /heatmap` (once)
 2. `GET /incidents` (paginated, initial load)
-3. `GET /anomaly` (then every 30s)
+3. `GET /anomaly` (then every 5s)
 
 **Interactions:**
 - Marker click → `POST /predict` → `GET /action-plan` SSE → `IncidentPanel` opens
@@ -632,7 +638,7 @@ These are computed from raw dataset columns before training. The same logic runs
 **Null handling:**
 - `zone`: null in 57% of records. Do not drop — use "unknown" label class. For anomaly detection, null-zone records group by `police_station`.
 - `junction`: null in 69% of records. `junction_recurrence` defaults to 1 for null.
-- `veh_type`: null in ~40% of records. One-hot encoding returns all-zeros for null.
+- `veh_type`: null in ~40% of records. Label encoding returns -1 for null.
 
 ---
 
@@ -641,13 +647,13 @@ These are computed from raw dataset columns before training. The same logic runs
 Strict dependency order. Each stage produces artifacts the next stage consumes.
 
 **Stage 1 — Data pipeline and models**
-Load CSV → filter `authenticated=yes` → handle nulls (null-safe encoding, not row-dropping) → compute all derived features → build `junction_recurrence` lookup table → build zone label encoder with "unknown" class → one-hot encode `event_cause` and `veh_type` → compute `resolution_minutes` with primary/fallback logic → drop outliers → train XGBoost classifier (with `scale_pos_weight`) → train XGBoost regressor → compute anomaly baseline aggregate table → train Isolation Forest → serialize all models with joblib → write `build_feature_vector()` function used identically at train and inference time.
+Load CSV → filter `authenticated=yes` → handle nulls (null-safe encoding, not row-dropping) → compute all derived features → build `junction_recurrence` lookup table → build zone label encoder with "unknown" class → label encode `event_cause` and `veh_type` → compute `resolution_minutes` with primary/fallback logic → drop outliers → train XGBoost classifier (with `scale_pos_weight`) → train XGBoost regressor → compute anomaly baseline aggregate table → train Isolation Forest → serialize all models with joblib → write `build_feature_vector()` function used identically at train and inference time.
 
 **Stage 2 — Backend endpoints**
 Write Agent 1 prompt and `POST /nlp-parse` → test against 5 real Kannada/mixed descriptions from dataset → write `POST /predict` → write Agent 4 prompt and `GET /action-plan` with SSE (test SSE with curl before connecting frontend) → implement anomaly replay loop as FastAPI `asyncio` background task → write `GET /anomaly`, `GET /heatmap`, `GET /incidents`, `GET /analytics` → write `POST /feedback` and `GET /feedback`.
 
 **Stage 3 — Frontend core**
-Set up Leaflet map → integrate heatmap plugin → build zone polygons as convex hulls → build Anomaly Monitor sidebar polling `/anomaly` every 30s → build IncidentPanel drawer with three states → wire map marker click.
+Set up Leaflet map → integrate heatmap plugin → build zone polygons as convex hulls → build Anomaly Monitor sidebar polling `/anomaly` every 5s → build IncidentPanel drawer with three states → wire map marker click.
 
 **Stage 4 — Frontend form, analytics, polish**
 Build Submit Incident form (both input modes) → wire three-step API sequence (`/nlp-parse` if description, then `/predict`, then `/action-plan` SSE) → build Analytics page (all four Recharts charts) → wire junction bar click to map pan → wire feedback buttons to `POST /feedback` (buttons appear only after streaming completes) → add loading skeletons and error handling.

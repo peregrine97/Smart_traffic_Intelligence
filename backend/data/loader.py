@@ -35,6 +35,7 @@ _df: Optional[pd.DataFrame] = None
 _heatmap_cache: Optional[List[Dict[str, float]]] = None
 _analytics_cache: Optional[Dict[str, Any]] = None
 _junction_lookup: Dict[str, int] = {}
+_corridor_counts: Dict[str, int] = {}
 
 # Corridor rank mappings (mirrors PredictionAgent constants)
 _ORR_VARIANTS = {"ORR East 1", "ORR East 2", "ORR North 1", "ORR North 2", "ORR West 1"}
@@ -228,6 +229,10 @@ def _build_junction_lookup(df: pd.DataFrame) -> Dict[str, int]:
     lookup = junc_df.groupby("junction").size().to_dict()
     return {k: int(v) for k, v in lookup.items()}
 
+def _build_corridor_counts(df: pd.DataFrame) -> Dict[str, int]:
+    """Return corridor → occurrence count mapping for PredictionAgent."""
+    counts = df["corridor"].value_counts().to_dict()
+    return {str(k): int(v) for k, v in counts.items()}
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -240,7 +245,7 @@ def load_dataset() -> None:
     Called once from ``main.py`` during the FastAPI startup event.
     Idempotent — safe to call multiple times.
     """
-    global _df, _heatmap_cache, _analytics_cache, _junction_lookup
+    global _df, _heatmap_cache, _analytics_cache, _junction_lookup, _corridor_counts
 
     if _df is not None:
         logger.debug("Dataset already loaded — skipping reload.")
@@ -271,6 +276,9 @@ def load_dataset() -> None:
     logger.info("Building junction lookup table …")
     _junction_lookup = _build_junction_lookup(_df)
 
+    logger.info("Building corridor counts table …")
+    _corridor_counts = _build_corridor_counts(_df)
+
     logger.info("Data loader initialisation complete.")
 
 
@@ -299,6 +307,9 @@ def get_junction_lookup() -> Dict[str, int]:
     """Return junction → recurrence count dict."""
     return _junction_lookup
 
+def get_corridor_counts() -> Dict[str, int]:
+    """Return corridor → occurrence count dict."""
+    return _corridor_counts
 
 def add_live_incident(incident_data: Dict[str, Any], prediction_result: Dict[str, Any]) -> None:
     """
@@ -315,11 +326,28 @@ def add_live_incident(incident_data: Dict[str, Any], prediction_result: Dict[str
     # Prepare the new row
     import datetime
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    
+
+    # Resolve coordinates: PredictRequest sends lat/lng (short form);
+    # historical marker replays send latitude/longitude (long form from the
+    # raw CSV column names). Check both; fall back to city centre only as a
+    # last resort so live submissions always pin to the correct map location.
+    _CITY_CENTRE_LAT = 12.9716
+    _CITY_CENTRE_LNG = 77.5946
+    resolved_lat = (
+        incident_data.get("lat")
+        or incident_data.get("latitude")
+        or _CITY_CENTRE_LAT
+    )
+    resolved_lng = (
+        incident_data.get("lng")
+        or incident_data.get("longitude")
+        or _CITY_CENTRE_LNG
+    )
+
     new_row = {
         "start_datetime": incident_data.get("start_datetime") or now_iso,
-        "latitude": incident_data.get("latitude", 12.9716),
-        "longitude": incident_data.get("longitude", 77.5946),
+        "latitude": float(resolved_lat),
+        "longitude": float(resolved_lng),
         "event_type": incident_data.get("event_type", "unplanned"),
         "event_cause": incident_data.get("event_cause", "unknown"),
         "veh_type": incident_data.get("veh_type"),
@@ -331,9 +359,9 @@ def add_live_incident(incident_data: Dict[str, Any], prediction_result: Dict[str
         "address": incident_data.get("address"),
         "priority": prediction_result.get("priority", "Low"),
         "estimated_duration_minutes": prediction_result.get("estimated_duration_minutes"),
-        # We set resolution_minutes so the heatmap cache picks it up properly
+        # resolution_minutes set from prediction so heatmap weight is computed correctly
         "resolution_minutes": prediction_result.get("estimated_duration_minutes"),
-        "is_live_submission": True  # Flag to distinguish from historical data
+        "is_live_submission": True,  # Flag to distinguish from historical data
     }
     
     new_df = pd.DataFrame([new_row])
