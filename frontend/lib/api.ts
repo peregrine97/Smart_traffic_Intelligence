@@ -28,14 +28,20 @@ export async function fetchIncidents(params: { zone?: string, priority?: string,
     }
 }
 
-export async function fetchAnomalyScores() {
+export async function fetchAnomalyScores(): Promise<{ zones: any[]; progress: { done: number; total: number; finished: boolean } }> {
     try {
         const response = await fetch(`${API_BASE_URL}/anomaly`);
         if (!response.ok) throw new Error('Failed to fetch anomaly scores');
-        return await response.json();
+        const data = await response.json();
+        // Backend now returns { zones: [...], progress: {...} }
+        // Guard against old shape (plain array) during transition
+        if (Array.isArray(data)) {
+            return { zones: data, progress: { done: 0, total: 0, finished: false } };
+        }
+        return data;
     } catch (error) {
         console.error(error);
-        return [];
+        return { zones: [], progress: { done: 0, total: 0, finished: false } };
     }
 }
 
@@ -95,18 +101,49 @@ export async function submitFeedback(feedback: { incident_context: any, action_p
     }
 }
 
-export async function resetAnomalyReplay() {
+export async function resetAnomalyReplay(): Promise<{ zones: any[]; progress: { done: number; total: number; finished: boolean } } | null> {
     try {
         const response = await fetch(`${API_BASE_URL}/anomaly/replay`, {
             method: 'POST'
         });
         if (!response.ok) throw new Error('Failed to reset anomaly replay');
+        const data = await response.json();
+        if (Array.isArray(data)) {
+            return { zones: data, progress: { done: 0, total: 0, finished: false } };
+        }
+        return data;
+    } catch (error) {
+        console.error(error);
+        return null;
+    }
+}
+
+/** Fetch the current accumulated heatmap replay points from the backend. */
+export async function fetchHeatmapReplay() {
+    try {
+        const response = await fetch(`${API_BASE_URL}/heatmap/replay`);
+        if (!response.ok) throw new Error('Failed to fetch heatmap replay');
         return await response.json();
     } catch (error) {
         console.error(error);
         return null;
     }
 }
+
+/** Reset the heatmap replay to the beginning of the dataset. */
+export async function resetHeatmapReplay() {
+    try {
+        const response = await fetch(`${API_BASE_URL}/heatmap/replay`, {
+            method: 'POST'
+        });
+        if (!response.ok) throw new Error('Failed to reset heatmap replay');
+        return await response.json();
+    } catch (error) {
+        console.error(error);
+        return null;
+    }
+}
+
 
 /**
  * Streams an LLM action plan from POST /action-plan using fetch + ReadableStream.

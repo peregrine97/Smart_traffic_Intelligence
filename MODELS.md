@@ -24,7 +24,7 @@ When building your `X` matrix for XGBoost, the columns must align exactly with t
 5. `requires_road_closure` *(Integer: 1 for Yes, 0 for No)*
 6. `hour_of_day` *(Integer: 0 to 23)*
 7. `day_of_week` *(Integer: 0 to 6)*
-8. `is_peak_hour` *(Integer: 1 if hour is 7,8,9 or 17,18,19, else 0)*
+8. `is_peak_hour` *(Integer: 1 if hour is 7,8,9,10 or 17,18,19,20, else 0)*
 9. `is_weekend` *(Integer: 1 if day_of_week is 5 or 6, else 0)*
 10. `zone` *(Integer Label Encoded. Null zones must be explicitly grouped/handled, do not drop!)*
 11. `junction_recurrence` *(Integer: How many times this junction appeared historically, default 1)*

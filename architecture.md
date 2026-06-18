@@ -13,10 +13,10 @@ A real-time traffic intelligence dashboard for Bengaluru traffic authorities. Th
 
 | Layer | Technology |
 |---|---|
-| Frontend | React, Leaflet.js, Recharts, Server-Sent Events (SSE) |
+| Frontend | Next.js, React, TypeScript, Tailwind CSS, Leaflet.js, Recharts, SSE |
 | Backend | FastAPI (Python) |
 | ML Models | XGBoost (classifier + regressor), Isolation Forest |
-| LLM | Claude Sonnet API (Agents 1 and 4) |
+| LLM | Google Gemini 2.5 Flash API (Agents 1 and 4) |
 | Data | Bengaluru traffic incident CSV (8,173 records), held in-memory at runtime |
 | Persistence | None during session; `feedback.jsonl` for post-demo review |
 
@@ -30,29 +30,33 @@ A real-time traffic intelligence dashboard for Bengaluru traffic authorities. Th
 │   ├── main.py                  # FastAPI app, all endpoints, background tasks
 │   ├── agents/
 │   │   ├── nlp_parser.py        # Agent 1: NLP description extractor
-│   │   ├── predictor.py         # Agent 2: XGBoost classifier + regressor
-│   │   ├── anomaly.py           # Agent 3: Isolation Forest anomaly detection
-│   │   └── action_planner.py    # Agent 4: LLM action plan generator (SSE)
+│   │   ├── prediction_agent.py  # Agent 2: XGBoost classifier + regressor
+│   │   ├── anomaly_detector.py  # Agent 3: Isolation Forest anomaly detection
+│   │   ├── action_planner.py    # Agent 4: LLM action plan generator (SSE)
+│   │   └── feature_engineering.py # Data pipeline logic
 │   ├── data/
-│   │   ├── pipeline.py          # Data loading, feature engineering, encoders
-│   │   └── traffic_incidents.csv
+│   │   ├── loader.py            # Data loading
+│   │   └── bengaluru_traffic_incidents.csv
 │   ├── models/
-│   │   ├── classifier.joblib
-│   │   ├── regressor.joblib
-│   │   └── isolation_forest.joblib
+│   │   ├── priority_model.joblib
+│   │   ├── duration_model.joblib
+│   │   ├── anomaly_detector.joblib
+│   │   ├── encoders.joblib
+│   │   └── junction_lookup.joblib
+│   ├── routes/                  # All FastAPI endpoint routers
 │   └── feedback.jsonl           # Appended at runtime; not committed
 ├── frontend/
-│   ├── src/
-│   │   ├── views/
-│   │   │   ├── MapView.jsx       # View 1: Leaflet map + Anomaly Monitor sidebar
-│   │   │   ├── SubmitView.jsx    # View 2: Incident submission form
-│   │   │   └── AnalyticsView.jsx # View 3: Historical charts
-│   │   ├── components/
-│   │   │   └── IncidentPanel.jsx # Shared right-side drawer (all three views)
-│   │   └── api.js               # All fetch/SSE calls to the backend
+│   ├── app/
+│   │   └── dashboard/page.tsx   # Next.js main dashboard page
+│   ├── components/
+│   │   └── dashboard/
+│   │       ├── MapView.tsx      # View 1: Leaflet map + Anomaly Monitor sidebar
+│   │       ├── SubmitIncidentView.tsx # View 2: Incident submission form
+│   │       ├── AnalyticsView.tsx # View 3: Historical charts
+│   │       └── IncidentPanel.tsx # Shared right-side drawer
 │   └── public/
 ├── architecture.md              # This file
-└── agents.md                    # Agent specification (source of truth for agents)
+└── AGENTS.md                    # Agent specification (source of truth for agents)
 ```
 
 ---
@@ -60,6 +64,23 @@ A real-time traffic intelligence dashboard for Bengaluru traffic authorities. Th
 ## 3. API Endpoints
 
 All endpoints are served by FastAPI. The dataset DataFrame and all trained models are loaded into memory at server startup. No database is used.
+
+### `GET /health`
+
+**Purpose:** Quick liveness probe.
+
+**Input:** None.
+
+**Output:**
+```json
+{
+  "status": "ok",
+  "service": "Smart Traffic Intelligence API",
+  "version": "1.0.0"
+}
+```
+
+---
 
 ### `GET /heatmap`
 
@@ -79,10 +100,25 @@ Weight formula: `base_weight * duration_factor`
 - `base_weight`: 2 if `priority == "High"`, 1 if `priority == "Low"`
 - `duration_factor`: normalized `resolution_minutes` (0–1 scale, computed at startup)
 
-Computed once at startup from the full 8,173-record dataset and cached. Frontend calls this once on load.
+Computed once at startup from the full dataset and cached. Frontend calls this once on load for the default static view.
 
 ---
 
+### `GET /heatmap/replay`
+
+**Purpose:** Provide dynamically accumulating lat/lng data for the "City Replay" mode.
+
+**Output:** Same JSON structure as `/heatmap`.
+
+**Mechanism:** Returns the current state of a background loop that streams chronological incidents (3 every 0.066 seconds). Frontend polls this every 5 seconds when City Replay is active.
+
+---
+
+### `POST /heatmap/replay`
+
+**Purpose:** Resets the heatmap replay accumulator to the beginning of the dataset.
+
+---
 ### `GET /incidents`
 
 **Purpose:** Serve incident markers for the Leaflet map.
@@ -323,7 +359,7 @@ All agents are Python functions inside the FastAPI backend — not separate serv
 **Input:** Raw string in any language (Kannada, English, mixed, transliterated).
 
 **Internal process:**
-1. Backend constructs a Claude Sonnet API call.
+1. Backend constructs a Google Gemini API call.
 2. System prompt: structured extraction agent for Bengaluru traffic incidents.
 3. User message: few-shot example (one Kannada input → expected JSON output) + raw user string.
 4. Model is instructed to return only a JSON object — no preamble, no explanation.
@@ -353,18 +389,18 @@ All agents are Python functions inside the FastAPI backend — not separate serv
 
 | Feature | Encoding |
 |---|---|
-| `event_type` | Binary: planned=1, unplanned=0 |
-| `corridor_rank` | Ordinal: named=2, ORR=1, non-corridor=0 |
-| `event_cause` | Label encoded |
-| `veh_type` | Label encoded (returns -1 when unknown) |
+| `latitude` | Float |
+| `longitude` | Float |
 | `requires_road_closure` | Binary: 0 or 1 |
 | `hour_of_day` | Integer 0–23 |
 | `day_of_week` | Integer 0–6 |
-| `is_peak_hour` | Binary (1 if hour in [7,8,9,17,18,19]) |
+| `is_peak_hour` | Binary (1 if hour in [7,8,9,10,17,18,19,20]) |
 | `is_weekend` | Binary (1 if day_of_week in [5,6]) |
-| `zone` | Label encoded; "unknown" class reserved for nulls |
+| `corridor_rank` | Integer (frequency count of incidents per corridor) |
 | `junction_recurrence` | Integer from lookup table; default=1 for unknown |
-| `planned_duration_minutes` | Float; 0 for unplanned events |
+| `event_cause_enc` | Label encoded against the dataset's cause vocabulary |
+| `veh_type_enc` | Label encoded (returns -1 when vehicle type is unknown) |
+| `zone_enc` | Label encoded; a dedicated "unknown" label is reserved for nulls |
 
 **Two models, same feature vector:**
 
@@ -388,7 +424,7 @@ Models are serialized with joblib and loaded at server startup. Inference: < 100
 
 ### Agent 3 — Anomaly Detection Agent (Isolation Forest)
 
-**Triggered by:** Background `asyncio` task running every 5 seconds during the demo. Not triggered by user actions directly.
+**Triggered by:** Background `asyncio` task running every 0.066 seconds during the demo. Not triggered by user actions directly.
 
 **Grouping:** Records where `zone` is null are grouped by `police_station` instead, ensuring all 8,173 records contribute to the baseline.
 
@@ -424,7 +460,7 @@ Alert level mapping: `> 0` = Normal, `-0.1 to 0` = Watch, `< -0.1` = Critical.
 **Input:** Full context block assembled from the original incident fields + Agent 2 output (see endpoint section above).
 
 **Internal process:**
-1. Backend constructs a Claude Sonnet API call with `stream=True`.
+1. Backend constructs a Google Gemini API call with `stream=True`.
 2. System message: traffic authority operations assistant with Bengaluru road network knowledge.
 3. User message: all context fields in labeled plaintext.
 4. Instruction: produce exactly six labeled sections; no preamble.
@@ -465,7 +501,7 @@ Incident Panel opens (loading state)
     ▼
 Frontend: GET /action-plan (SSE)  ────────────────────────────────────────────────────────────────►
                                                                                                     Backend:
-                                                                                                    Claude Sonnet API (stream)
+                                                                                                    Google Gemini API (stream)
 ◄──────────────────────────────────────────────────────────────────────────────────────────────────
     token... token... token...
     │
@@ -491,7 +527,7 @@ Frontend detects non-empty description
     ▼
 Frontend: POST /nlp-parse  ───────────────────────────────────────────────────────────────────────►
                                                                                                     Agent 1:
-                                                                                                    Claude Sonnet API (non-streaming)
+                                                                                                    Google Gemini API (non-streaming)
 ◄──────────────────────────────────────────────────────────────────────────────────────────────────
     {root_cause, vehicle_type, severity, action_needed, normalized_summary}
     │
@@ -548,17 +584,18 @@ Incident Panel opens with historical incident's address/junction + fresh predict
 
 **Components:**
 - `LeafletMap` — full-screen, three layers:
-  1. Heatmap layer (Leaflet.heat plugin, data from `GET /heatmap`)
+  1. Heatmap layer (Leaflet.heat plugin). Defaults to static historical data from `GET /heatmap`, with a "City Replay" mode that polls `GET /heatmap/replay` dynamically.
   2. Incident markers (data from `GET /incidents`, paginated; red=High, amber=Low)
   3. Zone polygons (convex hulls computed from dataset lat/lng grouped by zone; fill color driven by `GET /anomaly`)
 - `AnoalyMonitorSidebar` — collapsible, left or right side:
   - One card per zone: name, alert badge, three numbers (count / ratio / duration)
   - "Generate Plan" button triggers Flow C
 
-**API calls on load:**
-1. `GET /heatmap` (once)
-2. `GET /incidents` (paginated, initial load)
-3. `GET /anomaly` (then every 5s)
+**API calls on load/runtime:**
+1. `GET /heatmap` (once on load)
+2. `GET /heatmap/replay` (polled every 5s if replay mode is active)
+3. `GET /incidents` (paginated, initial load)
+4. `GET /anomaly` (polled every 5s)
 
 **Interactions:**
 - Marker click → `POST /predict` → `GET /action-plan` SSE → `IncidentPanel` opens
@@ -628,9 +665,9 @@ These are computed from raw dataset columns before training. The same logic runs
 | `planned_duration_minutes` | `end_datetime - start_datetime` (minutes), planned events only | Null for unplanned. |
 | `hour_of_day` | `start_datetime.hour` | Integer 0–23 |
 | `day_of_week` | `start_datetime.dayofweek` | Integer 0–6 |
-| `is_peak_hour` | 1 if hour in [7,8,9,17,18,19] | Binary |
+| `is_peak_hour` | 1 if hour in [7,8,9,10,17,18,19,20] | Binary |
 | `is_weekend` | 1 if day_of_week in [5,6] | Binary |
-| `corridor_rank` | Named corridor=2, ORR variant=1, Non-corridor=0, null=0 | 23 raw values → 3 ordinal levels |
+| `corridor_rank` | Incident frequency count for the corridor | Higher values = more historically prone |
 | `junction_recurrence` | Count of appearances of each junction string in dataset | Lookup table at inference; default=1 for unknown/null |
 | `time_bucket` | hour 6–10: morning_peak, 10–16: afternoon, 16–21: evening_peak, else: night | Used for anomaly grouping |
 | `day_type` | weekday / weekend from day_of_week | Used for anomaly grouping |
@@ -664,6 +701,7 @@ Build Submit Incident form (both input modes) → wire three-step API sequence (
 
 | Date | Change | Author |
 |---|---|---|
+| 2026-06-18 | Architecture updated to reflect actual Next.js, Gemini API, and feature implementations. | AI Assistant |
 | 2025-06-16 | Initial architecture.md created from agents.md | — |
 
 > All subsequent structural changes must be added as rows here before merging. This includes: new or removed endpoints, changes to feature vectors, agent prompt updates, UI view changes, new libraries or dependencies.

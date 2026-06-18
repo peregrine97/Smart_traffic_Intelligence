@@ -57,6 +57,7 @@ from backend.routes.anomaly import (
     anomaly_replay_loop,
 )
 from backend.routes.heatmap import router as heatmap_router
+from backend.routes.heatmap_replay import router as heatmap_replay_router, heatmap_replay_loop
 from backend.routes.incidents import router as incidents_router
 from backend.routes.analytics import router as analytics_router
 from backend.routes.action_plan import router as action_plan_router, init_action_planner
@@ -166,11 +167,16 @@ async def startup_event() -> None:
     init_action_planner(action_planner)
     logger.info("Agent 4 ready.")
 
-    # ── 6. Start anomaly replay background task ─────────────────────────────
-    logger.info("Starting anomaly replay background task …")
+    # ── 6. Start background replay tasks ──────────────────────────────────────
     df = get_dataframe()
+
+    logger.info("Starting anomaly replay background task …")
     asyncio.create_task(anomaly_replay_loop(df))
-    logger.info("Anomaly replay task started (interval: 5 s).")
+    logger.info("Anomaly replay task started.")
+
+    logger.info("Starting heatmap replay background task …")
+    asyncio.create_task(heatmap_replay_loop(df))
+    logger.info("Heatmap replay task started (3 incidents / 0.066 s tick, UI polls every 5 s).")
 
     logger.info("=== All agents initialised — server ready ===")
 
@@ -195,11 +201,12 @@ async def health_check():
 # ---------------------------------------------------------------------------
 # Mount all routers
 # ---------------------------------------------------------------------------
-app.include_router(predict_router,      prefix="", tags=["Prediction"])
-app.include_router(nlp_router,          prefix="", tags=["NLP"])
-app.include_router(anomaly_router,      prefix="", tags=["Anomaly"])
-app.include_router(heatmap_router,      prefix="", tags=["Map Data"])
-app.include_router(incidents_router,    prefix="", tags=["Map Data"])
-app.include_router(analytics_router,    prefix="", tags=["Analytics"])
-app.include_router(action_plan_router,  prefix="", tags=["Action Plan"])
-app.include_router(feedback_router,     prefix="", tags=["Feedback"])
+app.include_router(predict_router,        prefix="", tags=["Prediction"])
+app.include_router(nlp_router,            prefix="", tags=["NLP"])
+app.include_router(anomaly_router,        prefix="", tags=["Anomaly"])
+app.include_router(heatmap_router,        prefix="", tags=["Map Data"])
+app.include_router(heatmap_replay_router, prefix="", tags=["Map Data"])
+app.include_router(incidents_router,      prefix="", tags=["Map Data"])
+app.include_router(analytics_router,      prefix="", tags=["Analytics"])
+app.include_router(action_plan_router,    prefix="", tags=["Action Plan"])
+app.include_router(feedback_router,       prefix="", tags=["Feedback"])

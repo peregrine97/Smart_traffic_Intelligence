@@ -21,25 +21,23 @@ Traffic authorities today react to congestion *after* it happens — relying on 
 | Event-based congestion prediction | Forecast traffic volume and risk score for any upcoming event |
 | Multilingual incident understanding | Auto-classify Kannada/mixed-language incident reports using NLP |
 | GenAI action planner | LLM-generated response plans — officers, barricades, diversions |
-| Congestion heatmap | Visual hotspot map of historical and predicted congestion zones |
+| Congestion heatmap | Dynamic City Replay map of historical and streaming congestion zones |
 | Anomaly detection | Detect unexpected traffic surges before they become jams |
-| Diversion route recommendations | Suggest alternate corridors based on event location and priority |
-| Resource planning | Optimal manpower and barricade deployment per event type |
-| Interactive dashboard | Real-time monitoring, alerts, and incident simulator |
+| Interactive dashboard | Real-time monitoring, alerts, and incident submission |
 
 ---
 
 ## 🧠 Machine Learning
 
 ### Traffic Prediction
-- **Models:** XGBoost / LightGBM
-- **Predicts:** Traffic volume, congestion level, risk score, priority (High/Low), and estimated resolution time
-- **Inputs:** Event type, location, corridor, time-of-day, zone, historical patterns
+- **Models:** XGBoost (Classifier & Regressor)
+- **Predicts:** Priority (High/Low) and estimated resolution time (minutes)
+- **Inputs:** Location, corridor frequency, time-of-day, zone, historical junction patterns, incident cause
 
 ### Anomaly Detection
-- **Models:** Isolation Forest / Statistical Thresholding
-- **Detects:** Unexpected congestion surges, crowd spikes, and unplanned disruptions in real time
-- **Output:** Alert severity score + affected junction list
+- **Models:** Isolation Forest
+- **Detects:** Unexpected congestion surges and unplanned disruptions in real time (per zone)
+- **Output:** Alert severity score (Normal, Watch, Critical)
 
 ---
 
@@ -49,81 +47,48 @@ Traffic authorities today react to congestion *after* it happens — relying on 
 Real-world incident descriptions in this dataset are written in Kannada, broken English, and mixed scripts (e.g. *"pipe vehicle off aagide saro"*). A standard rule-based system would discard this as noise.
 
 **What it does:**
-- Uses **IndicBERT** or an LLM (e.g. GPT / Gemini) to read free-text descriptions in any language
-- Extracts: root cause, vehicle type, severity, and affected area
+- Uses **Google Gemini 2.5 Flash** to read free-text descriptions in any language
+- Extracts: root cause, vehicle type, severity, and generates an English summary
 - Auto-classifies the event so it feeds cleanly into the ML pipeline
-- Turns previously dead data into actionable signal
-
-**Dataset fields used:** `description`, `event_cause`, `event_type`, `authenticated`
-
-```
-Input:  "ಬಿಎಂಟಿಸಿ ಬಸ್ ಕೆಟ್ಟು ನಿಂತಿದೆ ಸರ್"
-Output: { cause: "vehicle_breakdown", vehicle: "bmtc_bus", severity: "high", action_needed: true }
-```
-
----
 
 ### 2. GenAI Action Planner — Automated Response Generation
-Once the ML model predicts priority and expected duration, a Large Language Model takes that output and generates a **complete, human-readable response plan** — no officer needs to figure out deployment from scratch.
+Once the ML model predicts priority and expected duration, a Large Language Model takes that output and generates a **complete, human-readable response plan**.
 
 **What it does:**
 - Receives: predicted priority, event type, corridor, duration estimate, junction name
-- Generates: number of officers to deploy, which junctions to barricade, diversion routes to activate, and escalation triggers
-- Output is in plain language, ready to be acted on immediately
-
-**Dataset fields used:** `junction`, `corridor`, `requires_road_closure`, `priority`, `police_station`, `zone`
-
-```
-Input:
-  Event: vehicle_breakdown
-  Location: Tumkur Road, Jalahalli Cross Junction
-  Corridor: High priority
-  Predicted duration: 2.5 hrs
-
-GenAI Output:
-  "Deploy 3 officers to Jalahalli Cross Junction immediately.
-   Block the left lane approaching Peenya. Activate diversion
-   via SM Circle inbound. Estimated clearance by 19:30.
-   Escalate to Peenya station if not resolved in 90 mins."
-```
+- Generates: officers to deploy, barricades, diversion routes, estimated clearance, escalation triggers, and public advisories
+- Output is in plain language, streamed in real-time, ready to be acted on immediately
 
 ---
 
 ## 🏗 System Architecture
 
 ```
-Raw Incident Data (CSV / API)
+Raw Incident Data (CSV)
         │
         ▼
 ┌─────────────────────────┐
-│  Multilingual NLP Layer │  ← IndicBERT / LLM
-│  (Kannada + mixed text) │
-└────────────┬────────────┘
-             │ cleaned + classified events
-             ▼
-┌─────────────────────────┐
-│   Feature Engineering   │  ← duration, corridor score,
-│                         │    time buckets, zone mapping
+│  FastAPI Backend        │
+│  (Data & Feature Eng.)  │
 └────────────┬────────────┘
              │
       ┌──────┴──────┐
       ▼             ▼
 ┌──────────┐  ┌──────────────┐
 │ XGBoost  │  │ Isolation    │
-│Classifier│  │ Forest       │
-│(priority,│  │(anomaly      │
-│duration) │  │ detection)   │
+│ Models   │  │ Forest       │
+│(Priority,│  │(Anomaly      │
+│ Duration)│  │ Detection)   │
 └────┬─────┘  └──────┬───────┘
      │               │
      └──────┬────────┘
             ▼
 ┌─────────────────────────┐
-│   GenAI Action Planner  │  ← LLM generates response plan
-│   (LLM / GPT / Gemini)  │
+│ Google Gemini 2.5 Flash │  ← NLP Parsing & Action Plans
 └────────────┬────────────┘
              ▼
 ┌─────────────────────────┐
-│   Interactive Dashboard │  ← React + Leaflet + FastAPI
+│ Next.js Interactive GUI │  ← React + Leaflet + Tailwind
 └─────────────────────────┘
 ```
 
@@ -132,61 +97,52 @@ Raw Incident Data (CSV / API)
 ## 🛠 Tech Stack
 
 ### Frontend
-- **React** — component-based UI
+- **Next.js (React)** — component-based UI
+- **TypeScript** — static typing
 - **Tailwind CSS** — styling
-- **Leaflet.js** — interactive map, heatmap, route visualization
+- **Leaflet.js** — interactive map, heatmap, markers
 
 ### Backend
-- **FastAPI** — REST API, prediction endpoints, GenAI integration
-
-### Database
-- **PostgreSQL** — event storage, historical incident data, resolution logs
+- **FastAPI** — REST API, SSE streaming, prediction endpoints
 
 ### Machine Learning
 - **Scikit-learn** — preprocessing, Isolation Forest
-- **XGBoost / LightGBM** — classification and regression models
+- **XGBoost** — classification and regression models
 - **Pandas / NumPy** — data processing and feature engineering
 
 ### GenAI / NLP
-- **IndicBERT** — multilingual NLP for Kannada/Hindi incident text
-- **OpenAI GPT / Google Gemini API** — action plan generation
-- **LangChain** *(optional)* — prompt chaining for multi-step GenAI flows
+- **Google Gemini API (2.5 Flash)** — NLP extraction and action plan generation
 
 ---
 
-## 📊 Dashboard Modules
+## 📊 Dashboard Views
 
-| Module | What it shows |
+| View | What it shows |
 |---|---|
-| Event Planner | Input upcoming events, get predicted congestion score |
-| Incident Simulator | Simulate any event type + location → instant response plan |
-| Prediction Dashboard | Risk scores, priority levels, estimated durations |
-| Congestion Heatmap | Historical + predicted hotspots across the city |
-| Resource Planning | Officer count, barricade locations, diversion routes |
-| Alerts & Anomaly Monitor | Live feed of detected surges with severity scores |
+| **Map View** | Full-screen Leaflet map with historical/streaming heatmap, anomaly zone polygons, and real-time alert sidebar |
+| **Submit Incident** | Form with structured inputs and free-text NLP processing to simulate/report incidents |
+| **Analytics** | Historical charts: volume grid, top junctions, corridor duration, planned vs unplanned counts |
+
+*All interactions funnel into a shared **Incident Panel** drawer that displays the prediction, streams the LLM action plan, and collects user feedback.*
 
 ---
 
 ## 🚀 MVP Scope
 
-- [x] Event input form (type, location, time, corridor)
+- [x] Event input form (structured + NLP description)
 - [x] Traffic prediction engine (priority + duration)
-- [x] Multilingual NLP for incident description classification
-- [x] GenAI action plan generator
-- [x] Congestion heatmap (Leaflet.js)
-- [x] Diversion route suggestions
-- [x] Resource recommendation output
-- [ ] Real-time anomaly alert feed *(post-MVP)*
-- [ ] Post-event learning report generation *(post-MVP)*
+- [x] Google Gemini integration for incident parsing
+- [x] GenAI action plan generator (streaming SSE)
+- [x] Dynamic Congestion heatmap with City Replay
+- [x] Real-time anomaly alert feed via Isolation Forest
+- [x] Post-plan user feedback collection
 
 ---
 
 ## 📂 Dataset
 
 Built on real Bengaluru traffic incident data containing:
-
-- **Parking violations dataset** — GPS coordinates, violation types, junction names, police station, timestamps
-- **Event & incident dataset** — planned/unplanned events, event cause, corridor classification, resolution times, multilingual descriptions, zone and junction metadata
+- Planned and unplanned events, event causes, corridor rankings, resolution times, multilingual descriptions, zone and junction metadata (8,173 records total).
 
 ---
 

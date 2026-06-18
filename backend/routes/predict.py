@@ -29,7 +29,6 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.agents.prediction_agent import PredictionAgent
-from backend.data.loader import add_live_incident
 
 logger = logging.getLogger(__name__)
 
@@ -179,11 +178,6 @@ async def predict_incident(request: PredictRequest) -> PredictResponse:
     """
     Accepts incident fields, runs Agent 2 (priority classifier + duration
     regressor), and returns the prediction result.
-
-    Also appends the new incident to the in-memory dataset via
-    add_live_incident() so the anomaly detector and heatmap immediately
-    reflect the submission. The lat/lng fields ensure the new map pin
-    appears at the correct location rather than the city centre.
     """
     if _agent is None:
         raise HTTPException(
@@ -196,10 +190,6 @@ async def predict_incident(request: PredictRequest) -> PredictResponse:
         incident_data = request.model_dump(exclude_none=False)
 
         result = _agent.predict_incident(incident_data)
-
-        # Append the new incident + prediction to the live dataset so
-        # the map and anomaly detector instantly see it.
-        add_live_incident(incident_data, result)
 
         return PredictResponse(**result)
 

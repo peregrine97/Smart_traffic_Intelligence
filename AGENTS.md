@@ -63,9 +63,9 @@ These features do not exist in the raw dataset and must be computed from what do
 - `planned_duration_minutes`: for planned events only, `end_datetime - start_datetime` in minutes. Set to null for unplanned events. Used as an optional feature in the regressor.
 - `hour_of_day`: integer 0–23, extracted from `start_datetime`.
 - `day_of_week`: integer 0–6, extracted from `start_datetime`.
-- `is_peak_hour`: 1 if `hour_of_day` is in [7, 8, 9, 17, 18, 19, 20], else 0.
+- `is_peak_hour`: 1 if `hour_of_day` is in [7, 8, 9, 10, 17, 18, 19, 20], else 0.
 - `is_weekend`: 1 if `day_of_week` is 5 or 6, else 0.
-- `corridor_rank`: ordinal integer. Any named major road corridor = 2, ORR variants (ORR East 1/2, ORR North 1/2, ORR West 1) = 1, Non-corridor = 0. The dataset contains 23 distinct corridor values; this encoding reduces them to three ordered levels. Null corridor values map to 0.
+- `corridor_rank`: integer representing incident frequency count per corridor. Higher values indicate more historically incident-prone corridors. Null corridor values map to a default rank.
 - `junction_recurrence`: for each junction string in the dataset, count how many times it appears. This is a proxy for how congestion-prone that junction is historically. Computed once at training time. At inference time, a lookup table is used to find the value for the submitted junction, or 1 if the junction is new or null.
 - `time_bucket`: a categorical derived from `hour_of_day` with four values — morning_peak (6–10), afternoon (10–16), evening_peak (16–21), night (21–6). Used for anomaly detection grouping.
 - `day_type`: weekday or weekend, derived from `day_of_week`. Used for anomaly detection grouping.
@@ -80,7 +80,7 @@ The dashboard has three views and one component that is shared across all of the
 
 This is what the user sees when they log in. It is a full-screen Leaflet.js map of Bengaluru with three layers:
 
-The first layer is a heatmap. Every incident in the dataset is plotted at its latitude/longitude, with weight determined by priority (High incidents contribute more heat than Low) and duration (longer incidents contribute more heat). This shows, at a glance, where incidents historically cluster in the city.
+The first layer is a heatmap. Every incident in the dataset is plotted at its latitude/longitude, with weight determined by priority (High incidents contribute more heat than Low) and duration (longer incidents contribute more heat). It defaults to a static historical view showing overall city clustering. However, it also includes a "City Replay" mode, which streams chronological incident data into the heatmap dynamically, accumulating points over time to show how traffic builds up. The map dynamically adjusts its radius and blur based on the zoom level to maintain accurate representations of congested corridors and junctions.
 
 The second layer is individual incident markers — one pin per incident, red for High priority, amber for Low. Hovering on a pin shows the junction name. Clicking a pin opens the Incident Panel on the right side of the screen.
 
@@ -146,8 +146,8 @@ Input: a raw string. This may be in Kannada script, broken English, mixed langua
 What it does internally: the backend makes a single call to the gemini flash API. The prompt contains a system instruction telling the model to act as a structured extraction agent for traffic incident descriptions, a few-shot example block showing one Kannada input and its expected JSON output, and the raw user description. The model is instructed to return only a JSON object with no explanation or prose.
 
 Output: a JSON object with five fields:
-- `root_cause`: one of the dataset's `event_cause` values — `vehicle_breakdown`, `tree_fall`, `accident`, `water_logging`, `pot_holes`, `construction`, `public_event`, `procession`, `vip_movement`, `protest`, `congestion`, `road_conditions`, or `others`
-- `vehicle_type`: one of the dataset's `veh_type` values (`bmtc_bus`, `ksrtc_bus`, `heavy_vehicle`, `lcv`, `truck`, `private_bus`, `private_car`, `taxi`, `auto`, `others`), or null if not mentioned
+- `root_cause`: one of the NLP parser's predefined values — `vehicle_breakdown`, `accident`, `road_maintenance`, `water_logging`, `tree_fall`, `protest`, `traffic_congestion`, `vip_movement`, `unplanned_utility_work`, or `general_delay`
+- `vehicle_type`: one of the NLP parser's predefined values (`bmtc_bus`, `car`, `two_wheeler`, `auto_rickshaw`, `hgv`, `lcv`, `ambulance`), or null if not mentioned
 - `severity`: integer 1, 2, or 3 (low, medium, high) based on the description's urgency
 - `action_needed`: boolean
 - `normalized_summary`: a one-sentence English description of the incident for display
@@ -161,18 +161,18 @@ The agent's output is shown to the user in the Incident Panel as a "Parsed from 
 This agent always runs, for every incident submission and every map marker click.
 
 Input: a feature vector constructed from either the user's form submission or a stored incident's fields. The features are:
-- `event_type` (binary: planned=1, unplanned=0)
-- `corridor_rank` (ordinal: 0, 1, or 2)
-- `event_cause` (label encoded against the dataset's cause vocabulary)
-- `veh_type` (label encoded, returns -1 when vehicle type is unknown)
+- `latitude` (float)
+- `longitude` (float)
 - `requires_road_closure` (0 or 1)
 - `hour_of_day` (0–23)
 - `day_of_week` (0–6)
 - `is_peak_hour` (0 or 1)
 - `is_weekend` (0 or 1)
-- `zone` (label encoded; a dedicated "unknown" label is reserved for null zones)
+- `corridor_rank` (integer: frequency count)
 - `junction_recurrence` (integer, from the lookup table; default 1 for unknown junctions)
-- `planned_duration_minutes` (float; null/0 for unplanned events)
+- `event_cause_enc` (label encoded against the dataset's cause vocabulary)
+- `veh_type_enc` (label encoded, returns -1 when vehicle type is unknown)
+- `zone_enc` (label encoded; a dedicated "unknown" label is reserved for null zones)
 
 There are two separate XGBoost models, both sharing this same feature vector.
 

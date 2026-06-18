@@ -7,30 +7,39 @@ The background replay task (started in main.py) updates the cache every 0.066 se
 Frontend polls this endpoint every 5 seconds to update zone polygon colours
 and the Anomaly Monitor sidebar cards.
 
-Response: list of {
-  zone, alert_level, incident_count, high_priority_ratio, mean_duration, anomaly_score
+Response shape:
+{
+  "zones": [{ zone, alert_level, incident_count, high_priority_ratio, mean_duration, anomaly_score }, ...],
+  "progress": { "done": int, "total": int, "finished": bool }
 }
 
---- HOW THE REPLAY WORKS ---
+--- HOW THE REPLAY WORKS (sliding-window mode) ---
 
 Every 0.066s, INCIDENTS_PER_TICK (3) new incidents are pulled from the dataset
-in chronological order and appended to a per-zone accumulator (dict of lists).
+in chronological order and appended to a per-zone sliding-window deque together
+with the incident's own start_datetime as its simulated timestamp.
 
-Incidents are NEVER removed — they only ever accumulate.
-The anomaly score for each zone reflects the total burden of all incidents seen
-so far in that zone, showing how the dataset builds up over time.
+After each batch, entries older than WINDOW_HOURS (24h) of SIMULATED time are
+evicted from the front of each deque. "Simulated time" is defined as the
+start_datetime of the most-recently-processed incident.
+
+The incident count fed to the Isolation Forest is therefore the number of
+incidents that occurred in the trailing 24h of the dataset's own timeline.
+Because the model was trained on mean-incidents-per-day, and the window is
+exactly one day, the feature scale matches training — fixing the all-Critical bug.
 
 When the dataset is exhausted the loop sets _replay_finished=True and stops
-updating — the scores freeze at the end state until manually reset.
+updating — the scores freeze at the final state until the user manually resets
+via POST /anomaly/replay.
 
-POST /anomaly/replay resets the accumulators and signals the background loop
+POST /anomaly/replay resets the window deques and signals the background loop
 via an asyncio.Event so the loop re-anchors its time reference atomically on
 the very next iteration — no race between the reset writer and the loop reader.
 """
 
 import asyncio
 import logging
-from collections import defaultdict
+from collections import deque
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -47,27 +56,29 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 # Shared state — written by background task, read by endpoint
 # ---------------------------------------------------------------------------
-_anomaly_cache: List[Dict[str, Any]] = []
+# Cache shape: {"zones": [...], "progress": {"done": int, "total": int, "finished": bool}}
+_anomaly_cache: Dict[str, Any] = {"zones": [], "progress": {"done": 0, "total": 0, "finished": False}}
 _detector: Optional[TrafficAnomalyDetector] = None
 
 # How many incidents to stream in per tick
 _INCIDENTS_PER_TICK = 3
 _REPLAY_INTERVAL_SECONDS = 0.066
 
-# Per-zone accumulators: zone -> {"count": int, "high_count": int, "duration_sum": float, "duration_n": int}
-# Incidents only ever get ADDED to these — never removed.
-_zone_accumulators: Dict[str, Dict[str, float]] = {}
+# Sliding-window size in hours of SIMULATED time.
+# 6h matches the average duration of the model's training 'time_buckets'
+# (Morning Peak=4h, Afternoon=6h, Evening Peak=5h, Night=9h).
+_WINDOW_HOURS = 6
+
+# Per-zone sliding-window deques.
+# Each entry in a deque: (simulated_timestamp: pd.Timestamp, is_high: int, resolution_minutes: float|None)
+_zone_windows: Dict[str, deque] = {}
 
 # ---------------------------------------------------------------------------
 # Reset signal — set by the endpoint, cleared by the background loop.
-# Using an asyncio.Event guarantees that the loop reads a consistent snapshot
-# of the reset state on the next iteration boundary, eliminating the race
-# condition where the loop wakes up mid-reset and computes the wrong number
-# of catch-up ticks.
 # ---------------------------------------------------------------------------
 _reset_event: asyncio.Event = asyncio.Event()
 
-# Read-only flags exposed to the endpoint for display purposes
+# Read-only flags
 _replay_finished: bool = False
 
 
@@ -85,8 +96,8 @@ def init_anomaly_detector(detector: TrafficAnomalyDetector) -> None:
     logger.info("Anomaly route initialised with TrafficAnomalyDetector instance.")
 
 
-def get_anomaly_cache() -> List[Dict[str, Any]]:
-    """Return the current anomaly cache."""
+def get_anomaly_cache() -> Dict[str, Any]:
+    """Return the current anomaly cache (zones + progress)."""
     return _anomaly_cache
 
 
@@ -157,32 +168,35 @@ async def anomaly_replay_loop(df: pd.DataFrame) -> None:
 
     total_rows = len(df_work)
 
+    # Window size as a pandas Timedelta (simulated time, not wall-clock)
+    window_td = pd.Timedelta(hours=_WINDOW_HOURS)
+
     # ------------------------------------------------------------------
     # Local helper: initialise / reinitialise replay state.
     # Returns the new (replay_start_time, processed_ticks) tuple.
     # ------------------------------------------------------------------
     def _init_replay_state() -> tuple:
-        """Zero out accumulators and return a fresh time anchor."""
-        global _zone_accumulators, _replay_finished, _anomaly_cache
+        """Zero out sliding-window deques and return a fresh time anchor."""
+        global _zone_windows, _replay_finished, _anomaly_cache
 
-        _zone_accumulators = {
-            zone: {"count": 0, "high_count": 0, "duration_sum": 0.0, "duration_n": 0}
-            for zone in all_zones
-        }
+        _zone_windows = {zone: deque() for zone in all_zones}
         _replay_finished = False
 
         # Zero the cache immediately so the frontend sees cleared state
-        _anomaly_cache = [
-            {
-                "zone": zone,
-                "alert_level": "Normal",
-                "incident_count": 0,
-                "high_priority_ratio": 0.0,
-                "mean_duration": 0.0,
-                "anomaly_score": 0.1,
-            }
-            for zone in all_zones
-        ]
+        _anomaly_cache = {
+            "zones": [
+                {
+                    "zone": zone,
+                    "alert_level": "Normal",
+                    "incident_count": 0,
+                    "high_priority_ratio": 0.0,
+                    "mean_duration": 0.0,
+                    "anomaly_score": 0.1,
+                }
+                for zone in all_zones
+            ],
+            "progress": {"done": 0, "total": total_rows, "finished": False},
+        }
 
         anchor = asyncio.get_event_loop().time()
         return anchor, 0
@@ -226,6 +240,9 @@ async def anomaly_replay_loop(df: pd.DataFrame) -> None:
                     if ticks_to_run > 0:
                         overall_mean = _detector.overall_mean_duration
 
+                        # --- Track the latest simulated timestamp seen so we can evict old entries ---
+                        last_sim_time: Optional[pd.Timestamp] = None
+
                         # Catch up all expected ticks that should have passed by this exact millisecond
                         for _ in range(ticks_to_run):
                             start_index = processed_ticks * _INCIDENTS_PER_TICK
@@ -234,17 +251,20 @@ async def anomaly_replay_loop(df: pd.DataFrame) -> None:
 
                             for _, row in batch.iterrows():
                                 zone = row["_zone_or_station"]
-                                if zone == "Unknown" or zone not in _zone_accumulators:
+                                sim_ts = row["_start_dt"]
+
+                                # Advance simulated clock
+                                if last_sim_time is None or sim_ts > last_sim_time:
+                                    last_sim_time = sim_ts
+
+                                if zone == "Unknown" or zone not in _zone_windows:
                                     continue
 
-                                acc = _zone_accumulators[zone]
-                                acc["count"] += 1
-                                acc["high_count"] += int(row["_is_high"])
-
                                 res_min = row["_resolution_minutes"]
-                                if pd.notnull(res_min) and 0 < res_min <= 1440:
-                                    acc["duration_sum"] += float(res_min)
-                                    acc["duration_n"] += 1
+                                valid_res = float(res_min) if (pd.notnull(res_min) and 0 < res_min <= 1440) else None
+
+                                # Append (simulated_ts, is_high, resolution_minutes|None)
+                                _zone_windows[zone].append((sim_ts, int(row["_is_high"]), valid_res))
 
                             processed_ticks += 1
                             if end_index >= total_rows:
@@ -252,11 +272,21 @@ async def anomaly_replay_loop(df: pd.DataFrame) -> None:
                                 logger.info("Anomaly stream reached end of dataset — going static.")
                                 break
 
-                        # Score every zone from its current accumulator state ONCE after catching up
+                        # ----------------------------------------------------------
+                        # Evict entries older than the 24h sliding window, then score
+                        # ----------------------------------------------------------
+                        cutoff = (last_sim_time - window_td) if last_sim_time is not None else None
+
                         scores = []
                         for zone in all_zones:
-                            acc = _zone_accumulators[zone]
-                            count = acc["count"]
+                            dq = _zone_windows[zone]
+
+                            # Evict entries that have aged out of the 24h window
+                            if cutoff is not None:
+                                while dq and dq[0][0] < cutoff:
+                                    dq.popleft()
+
+                            count = len(dq)
 
                             if count == 0:
                                 scores.append({
@@ -269,13 +299,14 @@ async def anomaly_replay_loop(df: pd.DataFrame) -> None:
                                 })
                                 continue
 
-                            high_priority_ratio = acc["high_count"] / count
-                            mean_duration = (
-                                acc["duration_sum"] / acc["duration_n"]
-                                if acc["duration_n"] > 0
-                                else overall_mean
-                            )
+                            high_count = sum(entry[1] for entry in dq)
+                            high_priority_ratio = high_count / count
 
+                            # Mean duration from valid entries in window; fall back to overall mean
+                            dur_vals = [entry[2] for entry in dq if entry[2] is not None]
+                            mean_duration = (sum(dur_vals) / len(dur_vals)) if dur_vals else overall_mean
+
+                            # count is per-day-equivalent because window == 24h == 1 day
                             X_live = np.array([[float(count), float(high_priority_ratio), float(mean_duration)]])
                             anomaly_score = float(_detector.model.decision_function(X_live)[0])
 
@@ -295,10 +326,21 @@ async def anomaly_replay_loop(df: pd.DataFrame) -> None:
                                 "anomaly_score": round(anomaly_score, 4),
                             })
 
-                        _anomaly_cache = scores
+                        _anomaly_cache = {
+                            "zones": scores,
+                            "progress": {
+                                "done": min(processed_ticks * _INCIDENTS_PER_TICK, total_rows),
+                                "total": total_rows,
+                                "finished": _replay_finished,
+                            },
+                        }
 
             else:
-                _anomaly_cache = _build_placeholder_cache(df_work)
+                placeholder = _build_placeholder_cache(df_work)
+                _anomaly_cache = {
+                    "zones": placeholder,
+                    "progress": {"done": 0, "total": total_rows, "finished": False},
+                }
 
         except Exception as exc:
             logger.exception("Unhandled error in anomaly_replay_loop: %s", exc)
@@ -347,24 +389,33 @@ def _build_placeholder_cache(df_work: pd.DataFrame) -> List[Dict[str, Any]]:
 
 @router.get(
     "/anomaly",
-    summary="Current anomaly scores for all zones",
+    summary="Current anomaly scores for all zones + replay progress",
     tags=["Anomaly"],
 )
-async def get_anomaly() -> List[Dict[str, Any]]:
+async def get_anomaly() -> Dict[str, Any]:
     """
-    Returns the most recently computed anomaly scores for every zone/station.
-    Updated strictly based on elapsed time by the background replay task.
+    Returns the most recently computed anomaly scores for every zone/station,
+    plus replay progress metadata.
+
+    Shape:
+    {
+      "zones": [{ zone, alert_level, incident_count, high_priority_ratio,
+                  mean_duration, anomaly_score }, ...],
+      "progress": { "done": int, "total": int, "finished": bool }
+    }
     """
-    if not _anomaly_cache:
+    if not _anomaly_cache.get("zones"):
         try:
             df = get_dataframe()
             df_work = df.copy()
             zone_series = df_work["zone"] if "zone" in df_work.columns else pd.Series(np.nan, index=df_work.index)
             ps_series   = df_work["police_station"] if "police_station" in df_work.columns else pd.Series(np.nan, index=df_work.index)
             df_work["_zone_or_station"] = zone_series.fillna(ps_series).fillna("Unknown")
-            return _build_placeholder_cache(df_work)
+            total = len(df_work)
+            placeholder = _build_placeholder_cache(df_work)
+            return {"zones": placeholder, "progress": {"done": 0, "total": total, "finished": False}}
         except Exception:
-            return []
+            return {"zones": [], "progress": {"done": 0, "total": 0, "finished": False}}
 
     return _anomaly_cache
 
@@ -374,7 +425,7 @@ async def get_anomaly() -> List[Dict[str, Any]]:
     summary="Reset the anomaly replay to the beginning",
     tags=["Anomaly"],
 )
-async def reset_anomaly_replay() -> List[Dict[str, Any]]:
+async def reset_anomaly_replay() -> Dict[str, Any]:
     """
     Signals the background loop to restart from tick 0.
 
@@ -389,12 +440,16 @@ async def reset_anomaly_replay() -> List[Dict[str, Any]]:
 
     # Zero out the cache immediately so the frontend sees cleared values
     # before the background loop processes the event.
-    zeroed: List[Dict[str, Any]] = [
+    current_total = _anomaly_cache.get("progress", {}).get("total", 0)
+    zeroed_zones = [
         {**entry, "incident_count": 0, "high_priority_ratio": 0.0,
          "mean_duration": 0.0, "alert_level": "Normal", "anomaly_score": 0.1}
-        for entry in _anomaly_cache
+        for entry in _anomaly_cache.get("zones", [])
     ]
-    _anomaly_cache = zeroed
+    _anomaly_cache = {
+        "zones": zeroed_zones,
+        "progress": {"done": 0, "total": current_total, "finished": False},
+    }
 
     # Signal the loop — it will re-anchor on its next iteration.
     _reset_event.set()
