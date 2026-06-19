@@ -10,16 +10,28 @@ export default function TeamPage() {
     const containerRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
+        // Safety net: force everything visible after 2s
+        const safety = setTimeout(() => {
+            document.querySelectorAll('.fade-in-up').forEach(el => {
+                (el as HTMLElement).style.opacity = '1';
+                (el as HTMLElement).style.transform = 'none';
+            });
+        }, 2000);
+
         const ctx = gsap.context(() => {
             gsap.from('.fade-in-up', {
-                y: 30,
+                y: 25,
                 opacity: 0,
-                duration: 0.6,
-                stagger: 0.15,
+                duration: 0.5,
+                stagger: 0.12,
                 ease: 'power2.out',
+                clearProps: 'all',
             });
         }, containerRef);
-        return () => ctx.revert();
+        return () => {
+            clearTimeout(safety);
+            ctx.revert();
+        };
     }, []);
 
     return (

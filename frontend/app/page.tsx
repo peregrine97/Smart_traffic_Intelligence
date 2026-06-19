@@ -62,65 +62,48 @@ export default function HomePage() {
   const navRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    // Safety net: force everything visible after 2 seconds no matter what
+    const safety = setTimeout(() => {
+      document.querySelectorAll('.hero-title, .hero-subtitle, .hero-cta, .stat-card, .bench-card, .nav-card').forEach(el => {
+        (el as HTMLElement).style.opacity = '1';
+        (el as HTMLElement).style.transform = 'none';
+      });
+    }, 2000);
+
     const ctx = gsap.context(() => {
-      // Hero animation
+      // Hero animation — immediate, no scroll trigger
       gsap.from('.hero-title', {
-        y: 60,
+        y: 40,
         opacity: 0,
-        duration: 0.8,
+        duration: 0.7,
         ease: 'power3.out',
+        clearProps: 'all',
       });
 
       gsap.from('.hero-subtitle', {
-        y: 40,
+        y: 30,
         opacity: 0,
         duration: 0.6,
-        delay: 0.3,
+        delay: 0.2,
         ease: 'power3.out',
+        clearProps: 'all',
       });
 
       gsap.from('.hero-cta', {
-        y: 30,
+        y: 20,
         opacity: 0,
         duration: 0.5,
-        delay: 0.5,
-        stagger: 0.15,
+        delay: 0.4,
+        stagger: 0.12,
         ease: 'power3.out',
+        clearProps: 'all',
       });
 
-      // Stats cards
+      // Stats cards — scroll triggered with generous start
       gsap.from('.stat-card', {
         scrollTrigger: {
           trigger: statsRef.current,
-          start: 'top 80%',
-          once: true,
-        },
-        y: 40,
-        opacity: 0,
-        duration: 0.6,
-        stagger: 0.12,
-        ease: 'power2.out',
-      });
-
-      // Benchmark cards
-      gsap.from('.bench-card', {
-        scrollTrigger: {
-          trigger: benchRef.current,
-          start: 'top 80%',
-          once: true,
-        },
-        y: 40,
-        opacity: 0,
-        duration: 0.6,
-        stagger: 0.15,
-        ease: 'power2.out',
-      });
-
-      // Navigation bento cards
-      gsap.from('.nav-card', {
-        scrollTrigger: {
-          trigger: navRef.current,
-          start: 'top 80%',
+          start: 'top 95%',
           once: true,
         },
         y: 30,
@@ -128,10 +111,44 @@ export default function HomePage() {
         duration: 0.5,
         stagger: 0.1,
         ease: 'power2.out',
+        clearProps: 'all',
+      });
+
+      // Benchmark cards
+      gsap.from('.bench-card', {
+        scrollTrigger: {
+          trigger: benchRef.current,
+          start: 'top 95%',
+          once: true,
+        },
+        y: 30,
+        opacity: 0,
+        duration: 0.5,
+        stagger: 0.12,
+        ease: 'power2.out',
+        clearProps: 'all',
+      });
+
+      // Navigation bento cards
+      gsap.from('.nav-card', {
+        scrollTrigger: {
+          trigger: navRef.current,
+          start: 'top 95%',
+          once: true,
+        },
+        y: 20,
+        opacity: 0,
+        duration: 0.4,
+        stagger: 0.08,
+        ease: 'power2.out',
+        clearProps: 'all',
       });
     });
 
-    return () => ctx.revert();
+    return () => {
+      clearTimeout(safety);
+      ctx.revert();
+    };
   }, []);
 
   return (

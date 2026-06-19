@@ -15,53 +15,69 @@ export default function ArchitecturePage() {
     const gridRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
+        // Safety net: force everything visible after 2s
+        const safety = setTimeout(() => {
+            document.querySelectorAll('.diag-box, .diag-line, .cap-card').forEach(el => {
+                (el as HTMLElement).style.opacity = '1';
+                (el as HTMLElement).style.transform = 'none';
+            });
+        }, 2000);
+
         const ctx = gsap.context(() => {
             // Header animation
             gsap.from(headerRef.current, {
-                y: 40,
+                y: 30,
                 opacity: 0,
-                duration: 0.8,
+                duration: 0.7,
                 ease: 'power3.out',
+                clearProps: 'all',
             });
 
             // Diagram boxes and lines
             const tl = gsap.timeline({
                 scrollTrigger: {
                     trigger: diagramRef.current,
-                    start: 'top 80%',
+                    start: 'top 95%',
                 }
             });
 
             tl.from('.diag-box', {
-                y: 30,
+                y: 20,
                 opacity: 0,
-                stagger: 0.2,
-                duration: 0.6,
+                stagger: 0.15,
+                duration: 0.5,
                 ease: 'power2.out',
+                clearProps: 'all',
             })
             .from('.diag-line', {
                 scaleX: 0,
                 transformOrigin: 'left',
                 stagger: 0.1,
-                duration: 0.4,
+                duration: 0.3,
                 ease: 'power1.inOut',
-            }, '-=0.4');
+                clearProps: 'all',
+            }, '-=0.3');
 
             // Capabilities Grid
             gsap.from('.cap-card', {
                 scrollTrigger: {
                     trigger: gridRef.current,
-                    start: 'top 80%',
+                    start: 'top 95%',
+                    once: true,
                 },
-                y: 40,
+                y: 30,
                 opacity: 0,
-                stagger: 0.15,
-                duration: 0.6,
+                stagger: 0.12,
+                duration: 0.5,
                 ease: 'power2.out',
+                clearProps: 'all',
             });
         });
 
-        return () => ctx.revert();
+        return () => {
+            clearTimeout(safety);
+            ctx.revert();
+        };
     }, []);
 
     return (

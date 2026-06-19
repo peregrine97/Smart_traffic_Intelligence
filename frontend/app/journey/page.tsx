@@ -13,27 +13,41 @@ export default function JourneyPage() {
     const contentRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
+        // Safety net: force everything visible after 2s
+        const safety = setTimeout(() => {
+            document.querySelectorAll('.pipeline-step').forEach(el => {
+                (el as HTMLElement).style.opacity = '1';
+                (el as HTMLElement).style.transform = 'none';
+            });
+        }, 2000);
+
         const ctx = gsap.context(() => {
             gsap.from(headerRef.current, {
-                y: 30,
+                y: 25,
                 opacity: 0,
-                duration: 0.8,
+                duration: 0.7,
                 ease: 'power3.out',
+                clearProps: 'all',
             });
 
             gsap.from('.pipeline-step', {
                 scrollTrigger: {
                     trigger: contentRef.current,
-                    start: 'top 80%',
+                    start: 'top 95%',
+                    once: true,
                 },
-                y: 40,
+                y: 30,
                 opacity: 0,
-                stagger: 0.2,
-                duration: 0.6,
+                stagger: 0.15,
+                duration: 0.5,
                 ease: 'power2.out',
+                clearProps: 'all',
             });
         });
-        return () => ctx.revert();
+        return () => {
+            clearTimeout(safety);
+            ctx.revert();
+        };
     }, []);
 
     return (

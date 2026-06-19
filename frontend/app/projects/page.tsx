@@ -15,50 +15,60 @@ export default function AgentsPage() {
     const cardsRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
+        // Safety net: force everything visible after 2s
+        const safety = setTimeout(() => {
+            document.querySelectorAll('.flow-node, .agent-card-item').forEach(el => {
+                (el as HTMLElement).style.opacity = '1';
+                (el as HTMLElement).style.transform = 'none';
+            });
+        }, 2000);
+
         const ctx = gsap.context(() => {
             gsap.from(headerRef.current, {
-                y: 40,
+                y: 30,
                 opacity: 0,
-                duration: 0.8,
+                duration: 0.7,
                 ease: 'power3.out',
+                clearProps: 'all',
             });
 
             // Flow Diagram Animation
             const flowTl = gsap.timeline({
                 scrollTrigger: {
                     trigger: flowRef.current,
-                    start: 'top 85%',
+                    start: 'top 95%',
                 }
             });
 
             flowTl.from('.flow-node', {
-                scale: 0.8,
+                scale: 0.85,
                 opacity: 0,
-                duration: 0.5,
-                stagger: 0.3,
+                duration: 0.4,
+                stagger: 0.2,
                 ease: 'back.out(1.2)',
-            })
-            .to('.agent-flow-line', {
-                width: '100%',
-                duration: 0.8,
-                ease: 'power1.inOut',
-            }, '-=0.8');
+                clearProps: 'all',
+            });
 
             // Agent Cards Animation
             gsap.from('.agent-card-item', {
                 scrollTrigger: {
                     trigger: cardsRef.current,
-                    start: 'top 80%',
+                    start: 'top 95%',
+                    once: true,
                 },
-                y: 50,
+                y: 30,
                 opacity: 0,
-                stagger: 0.2,
-                duration: 0.7,
+                stagger: 0.15,
+                duration: 0.5,
                 ease: 'power2.out',
+                clearProps: 'all',
             });
         });
 
-        return () => ctx.revert();
+        return () => {
+            clearTimeout(safety);
+            ctx.revert();
+        };
     }, []);
 
     const getIconForAgent = (id: string) => {
