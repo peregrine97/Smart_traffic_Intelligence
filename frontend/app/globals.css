@@ -180,6 +180,73 @@
   animation: pulseGlow 2s ease-in-out infinite 1.5s;
 }
 
+/* Architecture page data-flow connector animations */
+@keyframes archDataFlow {
+  0% {
+    left: -30%;
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    left: 100%;
+    opacity: 0;
+  }
+}
+
+@keyframes archDataFlowVertical {
+  0% {
+    top: -30%;
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    top: 100%;
+    opacity: 0;
+  }
+}
+
+.arch-data-flow-line {
+  overflow: hidden;
+}
+
+.arch-data-flow-line::after {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: -30%;
+  width: 40%;
+  height: calc(100% + 2px);
+  background: linear-gradient(90deg, transparent, var(--neo-primary), rgba(159, 232, 112, 0.8), transparent);
+  animation: archDataFlow 2.5s ease-in-out infinite;
+  border-radius: 2px;
+}
+
+.arch-data-flow-line-vertical {
+  overflow: hidden;
+}
+
+.arch-data-flow-line-vertical::after {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: -30%;
+  height: 40%;
+  width: calc(100% + 2px);
+  background: linear-gradient(180deg, transparent, var(--neo-primary), rgba(159, 232, 112, 0.8), transparent);
+  animation: archDataFlowVertical 2.5s ease-in-out infinite;
+  border-radius: 2px;
+}
+
 /* Status dot animations */
 @keyframes statusBlink {
   0%, 100% { opacity: 1; }
