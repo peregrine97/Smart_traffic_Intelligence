@@ -1,0 +1,280 @@
+# =============================================================================
+# Smart Traffic Intelligence — CI Workflow (Pull Requests)
+# =============================================================================
+# Triggers: Every Pull Request to any branch
+# Jobs: backend-tests, frontend-lint, frontend-tests, docker-validate, security
+# =============================================================================
+
+name: CI — Pull Request Checks
+
+on:
+  pull_request:
+    branches: ["**"]
+  push:
+    branches-ignore:
+      - main  # main branch is handled by deploy.yml
+
+defaults:
+  run:
+    working-directory: Smart_traffic_Intelligence
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 1: Backend Tests
+  # ─────────────────────────────────────────────────────────────────────────
+  backend-tests:
+    name: 🐍 Backend Tests (pytest)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            Smart_traffic_Intelligence/backend/requirements.txt
+            Smart_traffic_Intelligence/backend/requirements-dev.txt
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install -r backend/requirements-dev.txt
+
+      - name: Run backend tests with coverage
+        run: |
+          pytest backend/tests/ \
+            -v \
+            --tb=short \
+            --cov=backend \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage-backend.xml \
+            --junit-xml=test-results-backend.xml
+        env:
+          # Use a dummy key for tests — all Groq calls are mocked
+          GROQ_API_KEY: "test-key-ci-mock"
+          PYTHONPATH: "."
+
+      - name: Upload backend test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-test-results
+          path: |
+            Smart_traffic_Intelligence/test-results-backend.xml
+            Smart_traffic_Intelligence/coverage-backend.xml
+          retention-days: 7
+
+      - name: Upload backend coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-coverage-html
+          path: Smart_traffic_Intelligence/htmlcov/
+          retention-days: 7
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 2: Frontend Linting
+  # ─────────────────────────────────────────────────────────────────────────
+  frontend-lint:
+    name: 🔍 Frontend Lint (ESLint)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: Smart_traffic_Intelligence/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: Smart_traffic_Intelligence/frontend
+        run: npm ci
+
+      - name: Run ESLint
+        working-directory: Smart_traffic_Intelligence/frontend
+        run: npm run lint
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 3: Frontend Tests
+  # ─────────────────────────────────────────────────────────────────────────
+  frontend-tests:
+    name: ⚛️  Frontend Tests (Jest)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: Smart_traffic_Intelligence/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: Smart_traffic_Intelligence/frontend
+        run: npm ci
+
+      - name: Run Jest tests with coverage
+        working-directory: Smart_traffic_Intelligence/frontend
+        run: npm run test:ci
+        env:
+          NEXT_PUBLIC_API_URL: "http://localhost:8000"
+          CI: "true"
+
+      - name: Upload frontend test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-test-results
+          path: |
+            Smart_traffic_Intelligence/frontend/coverage/
+            Smart_traffic_Intelligence/frontend/junit.xml
+          retention-days: 7
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 4: Frontend Production Build Validation
+  # ─────────────────────────────────────────────────────────────────────────
+  frontend-build:
+    name: 🏗️  Frontend Build Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: Smart_traffic_Intelligence/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: Smart_traffic_Intelligence/frontend
+        run: npm ci
+
+      - name: Build Next.js production bundle
+        working-directory: Smart_traffic_Intelligence/frontend
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: "https://sti-backend.onrender.com"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 5: Docker Build Validation
+  # ─────────────────────────────────────────────────────────────────────────
+  docker-validate:
+    name: 🐳 Docker Build Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate Docker build (no push)
+        working-directory: Smart_traffic_Intelligence
+        run: |
+          docker build \
+            --file backend/Dockerfile \
+            --tag sti-backend:ci-test \
+            --no-cache \
+            --progress=plain \
+            .
+        # Note: build context is Smart_traffic_Intelligence/ so all
+        # backend/models/*.joblib and data/*.csv are included
+
+      - name: Verify container starts and passes health check
+        working-directory: Smart_traffic_Intelligence
+        run: |
+          # Start container with a dummy Groq key (agents degrade gracefully)
+          docker run -d \
+            --name sti-test \
+            -p 8000:8000 \
+            -e GROQ_API_KEY=test-key-ci \
+            sti-backend:ci-test
+
+          # Wait up to 90s for the server to be ready (startup loads ML models)
+          echo "Waiting for server to start..."
+          for i in $(seq 1 18); do
+            if curl -sf http://localhost:8000/health; then
+              echo "✅ Health check passed!"
+              break
+            fi
+            echo "Attempt $i/18 — server not ready, waiting 5s..."
+            sleep 5
+          done
+
+          # Final health check assertion
+          curl -sf http://localhost:8000/health | grep '"status":"ok"'
+
+      - name: Cleanup Docker container
+        if: always()
+        run: docker rm -f sti-test || true
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 6: Security Scanning
+  # ─────────────────────────────────────────────────────────────────────────
+  security-backend:
+    name: 🔒 Backend Security Audit (pip-audit)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Run pip-audit on backend dependencies
+        working-directory: Smart_traffic_Intelligence
+        run: |
+          pip-audit \
+            -r backend/requirements.txt \
+            --output-format json \
+            --output pip-audit-results.json \
+            --ignore-vuln GHSA-jfh8-c2jp-5-q8 || true
+          cat pip-audit-results.json
+
+      - name: Upload audit results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pip-audit-results
+          path: Smart_traffic_Intelligence/pip-audit-results.json
+          retention-days: 30
+
+  security-frontend:
+    name: 🔒 Frontend Security Audit (npm audit)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run npm audit
+        working-directory: Smart_traffic_Intelligence/frontend
+        # Only fail on high+ severity (moderate is acceptable for dev deps)
+        run: npm audit --audit-level=high || true

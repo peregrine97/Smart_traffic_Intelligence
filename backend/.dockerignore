@@ -1,0 +1,80 @@
+# =============================================================================
+# Smart Traffic Intelligence — .dockerignore
+# Build context root: Smart_traffic_Intelligence/
+# =============================================================================
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# CI/CD
+.github/
+
+# Python cache & compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+.env/
+
+# Environment files (secrets never go in image)
+.env
+.env.*
+!.env.example
+
+# Test artifacts
+backend/tests/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.junit.xml
+
+# Development requirements (not needed at runtime)
+backend/requirements-dev.txt
+backend/pytest.ini
+
+# Frontend (not needed in backend image)
+frontend/
+
+# Documentation
+*.md
+README*
+AGENTS.md
+CLAUDE.md
+MODELS.md
+architecture.md
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Node.js artifacts (if accidentally generated)
+node_modules/
+
+# ML training artifacts (evaluation directories — not needed at runtime)
+backend/models/evaluation_isolation_forest_anamoly/
+backend/models/evaluation_xgboost_analysis/
+
+# Training scripts (not needed at runtime)
+backend/training/
+
+# NOTE: backend/models/*.joblib ARE included (required at runtime)
+# NOTE: backend/data/*.csv  ARE included (required at runtime)

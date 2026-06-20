@@ -1,0 +1,54 @@
+# =============================================================================
+# Smart Traffic Intelligence — Render Deployment Configuration
+# =============================================================================
+# Docs: https://render.com/docs/render-yaml-reference
+#
+# SETUP STEPS:
+# 1. Connect your GitHub repo to Render.
+# 2. Set Root Directory to: Smart_traffic_Intelligence
+# 3. Create a secret environment group named "sti-secrets" in Render dashboard
+#    and add GROQ_API_KEY there.
+# 4. Push this file — Render will auto-detect and create the service.
+# =============================================================================
+
+services:
+  - type: web
+    name: sti-backend
+    runtime: docker
+    # Render sets Root Directory to Smart_traffic_Intelligence/
+    # so the Dockerfile path is relative to that root
+    dockerfilePath: ./backend/Dockerfile
+    # Build context is the root (Smart_traffic_Intelligence/) so all
+    # backend/models/*.joblib and backend/data/*.csv are available
+    dockerContext: .
+    plan: free          # Change to "starter" or "standard" for production
+    region: oregon      # Choose closest to your users
+    branch: main        # Deploy on push to main only
+
+    # Health check — Render uses this to confirm the service is live
+    healthCheckPath: /health
+
+    # Scaling (free plan supports 1 instance only)
+    numInstances: 1
+
+    # Auto-deploy on push to main
+    autoDeploy: true
+
+    envVars:
+      # Application environment
+      - key: ENVIRONMENT
+        value: production
+
+      # Python package path (uvicorn needs backend.main resolvable)
+      - key: PYTHONPATH
+        value: /app
+
+      # Groq API Key — set the actual value in Render Dashboard under
+      # "Environment" → "Secret Files" or "Environment Variables"
+      # Never commit the actual key here.
+      - key: GROQ_API_KEY
+        sync: false     # Tells Render to expect this from the dashboard
+
+      # Uvicorn tuning for Render free tier (512 MB RAM)
+      - key: WEB_CONCURRENCY
+        value: "1"
