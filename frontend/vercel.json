@@ -5,9 +5,6 @@
   "installCommand": "npm install",
   "devCommand": "npm run dev",
   "regions": ["bom1"],
-  "env": {
-    "NEXT_PUBLIC_API_URL": "@sti-backend-url"
-  },
   "headers": [
     {
       "source": "/(.*)",
@@ -34,7 +31,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://your-render-backend.onrender.com/:path*"
+      "destination": "https://smart-traffic-intelligence.onrender.com/:path*"
     }
   ]
 }
