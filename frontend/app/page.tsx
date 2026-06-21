@@ -160,7 +160,7 @@ export default function HomePage() {
           <div className="lg:col-span-8 flex flex-col gap-6">
             <div className="border-3 border-neo-border bg-white p-4 sm:p-8 md:p-16 shadow-neo relative overflow-hidden h-full flex flex-col justify-center min-h-[320px] sm:min-h-[500px]">
               {/* Background Decoration */}
-              <div className="absolute top-0 right-0 w-64 h-64 bg-accent rounded-full blur-3xl -mr-20 -mt-20 opacity-50"></div>
+              <div className="absolute top-0 right-0 w-64 h-64 bg-primary rounded-full blur-3xl -mr-20 -mt-20 opacity-50"></div>
 
               {/* Mobile: Status Badge & System Icon */}
               <div className="relative mb-12 sm:mb-8">
@@ -250,7 +250,7 @@ export default function HomePage() {
       </section>
 
       {/* Marquee Section - Platform Capabilities */}
-      <section className="py-0 bg-accent border-y-[3px] border-neo-border relative overflow-hidden">
+      <section className="py-0 bg-primary border-y-[3px] border-neo-border relative overflow-hidden">
         <div className="text-center py-2 border-b-[3px] border-neo-border">
           <h3 className="text-sm font-bold tracking-widest uppercase inline-block">Platform Capabilities</h3>
         </div>

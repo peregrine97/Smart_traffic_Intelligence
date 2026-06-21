@@ -11,11 +11,12 @@ module.exports = {
       colors: {
         background: 'var(--background)',
         foreground: 'var(--foreground)',
-        // Wise Palette - mapped to CSS variables
         "neo-bg": "var(--neo-bg)",
         "neo-card": "var(--neo-card)",
         "neo-text": "var(--neo-text)",
         "neo-border": "var(--neo-border)",
+        "neo-primary": "var(--neo-primary)",
+        "neo-secondary": "var(--neo-secondary)",
         primary: {
           DEFAULT: "#9FE870", // Wise Bright Green
           foreground: "#163300",
