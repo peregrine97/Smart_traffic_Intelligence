@@ -17,6 +17,21 @@ import { WarningCircle, ArrowRight, ListDashes, X, ArrowsClockwise, Play, Stop, 
 import type { IncidentPin } from '../../types/index';
 
 // ---------------------------------------------------------------------------
+// Patch Canvas 2D context to suppress willReadFrequently warning from leaflet.heat
+// ---------------------------------------------------------------------------
+if (typeof window !== 'undefined' && typeof HTMLCanvasElement !== 'undefined') {
+    const originalGetContext = HTMLCanvasElement.prototype.getContext;
+    // @ts-ignore
+    HTMLCanvasElement.prototype.getContext = function (type: string, options?: any) {
+        if (type === '2d') {
+            options = options || {};
+            options.willReadFrequently = true;
+        }
+        return originalGetContext.call(this, type, options);
+    };
+}
+
+// ---------------------------------------------------------------------------
 // Available LLM models for anomaly plan generation (Agent 4 / Action Planner)
 // ---------------------------------------------------------------------------
 const MODEL_OPTIONS = [
