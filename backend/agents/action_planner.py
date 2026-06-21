@@ -20,7 +20,7 @@ ALLOWED_MODELS = [
     "openai/gpt-oss-120b",
     "llama-3.3-70b-versatile",
 ]
-DEFAULT_MODEL = "groq/compound-mini"
+DEFAULT_MODEL = "llama-3.1-8b-instant"
 
 
 
@@ -191,50 +191,64 @@ class ActionPlannerAgent:
             ],
         }
 
-        try:
-            with requests.post(
-                self.base_url, headers=headers, json=payload, stream=True, timeout=30
-            ) as resp:
-                resp.raise_for_status()
-                for raw_line in resp.iter_lines():
-                    if not raw_line:
+        import time
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                with requests.post(
+                    self.base_url, headers=headers, json=payload, stream=True, timeout=30
+                ) as resp:
+                    if resp.status_code == 429:
+                        logger.warning(f"Groq Planner API 429. Retrying in {2**(attempt+1)}s...")
+                        time.sleep(2 ** (attempt + 1))
                         continue
-                    line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
-                    if line.startswith("data:"):
-                        data_str = line[len("data:"):].strip()
-                        if data_str == "[DONE]":
-                            break
-                        try:
-                            data_json = json.loads(data_str)
-                            delta = data_json["choices"][0].get("delta", {})
-                            text = delta.get("content", "")
-                            if text:
-                                yield f"data: {text}\n\n"
-                        except (json.JSONDecodeError, KeyError):
+                    resp.raise_for_status()
+                    for raw_line in resp.iter_lines():
+                        if not raw_line:
                             continue
+                        line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
+                        if line.startswith("data:"):
+                            data_str = line[len("data:"):].strip()
+                            if data_str == "[DONE]":
+                                break
+                            try:
+                                data_json = json.loads(data_str)
+                                delta = data_json["choices"][0].get("delta", {})
+                                text = delta.get("content", "")
+                                if text:
+                                    yield f"data: {text}\n\n"
+                            except (json.JSONDecodeError, KeyError):
+                                continue
+                # Success, break out of retry loop
+                break
 
-        except requests.exceptions.HTTPError as exc:
-            status_code = exc.response.status_code if exc.response is not None else "Unknown"
-            reason = exc.response.reason if exc.response is not None else "Error"
-            safe_url = sanitize_url(exc.request.url) if (exc.request and exc.request.url) else "URL"
-            safe_err = f"{status_code} Client Error: {reason} for url: {safe_url}"
-            logger.error(
-                "[Agent 4 - Action Planner] Groq streaming error (model=%s): %s",
-                resolved_model,
-                safe_err,
-            )
-            yield f"data: WARNING: API call failed ({safe_err}). Action Planner model is not loaded.\n\n"
-            yield "data: [DONE]\n\n"
-            return
-        except Exception as exc:
-            safe_err = re.sub(r'(Bearer\s+)\S+', r'\1[REDACTED]', str(exc))
-            logger.error(
-                "[Agent 4 - Action Planner] Groq streaming error (model=%s): %s",
-                resolved_model,
-                safe_err,
-            )
-            yield f"data: WARNING: API call failed ({safe_err}). Action Planner model is not loaded.\n\n"
-            yield "data: [DONE]\n\n"
-            return
+            except requests.exceptions.HTTPError as exc:
+                if exc.response is not None and exc.response.status_code == 429 and attempt < max_retries - 1:
+                    logger.warning(f"Groq Planner API 429. Retrying in {2**(attempt+1)}s...")
+                    time.sleep(2 ** (attempt + 1))
+                    continue
+                status_code = exc.response.status_code if exc.response is not None else "Unknown"
+                reason = exc.response.reason if exc.response is not None else "Error"
+                safe_url = sanitize_url(exc.request.url) if (exc.request and exc.request.url) else "URL"
+                safe_err = f"{status_code} Client Error: {reason} for url: {safe_url}"
+                logger.error(
+                    "[Agent 4 - Action Planner] Groq streaming error (model=%s): %s",
+                    resolved_model,
+                    safe_err,
+                )
+                yield f"data: WARNING: API call failed ({safe_err}). Action Planner model is not loaded.\n\n"
+                yield "data: [DONE]\n\n"
+                return
+            except Exception as exc:
+                safe_err = re.sub(r'(Bearer\s+)\S+', r'\1[REDACTED]', str(exc))
+                logger.error(
+                    "[Agent 4 - Action Planner] Groq streaming error (model=%s): %s",
+                    resolved_model,
+                    safe_err,
+                )
+                yield f"data: WARNING: API call failed ({safe_err}). Action Planner model is not loaded.\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
 
         yield "data: [DONE]\n\n"

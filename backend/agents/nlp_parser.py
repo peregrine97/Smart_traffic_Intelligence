@@ -20,7 +20,7 @@ ALLOWED_MODELS = [
     "openai/gpt-oss-120b",
     "llama-3.3-70b-versatile",
 ]
-DEFAULT_MODEL = "groq/compound-mini"
+DEFAULT_MODEL = "llama-3.1-8b-instant"
 
 
 
@@ -183,14 +183,28 @@ If you cannot parse the incident or if the text is completely irrelevant to traf
             ],
         }
 
-        response = requests.post(self.base_url, headers=headers, json=payload, timeout=10)
-        response.raise_for_status()
-        text = response.json()["choices"][0]["message"]["content"].strip()
+        import time
+        for attempt in range(3):
+            try:
+                response = requests.post(self.base_url, headers=headers, json=payload, timeout=10)
+                if response.status_code == 429:
+                    logger.warning(f"Groq NLP API 429. Retrying in {2**(attempt+1)}s...")
+                    time.sleep(2 ** (attempt + 1))
+                    continue
+                response.raise_for_status()
+                text = response.json()["choices"][0]["message"]["content"].strip()
 
-        if text.lower() == "null":
-            return None
+                if text.lower() == "null":
+                    return None
 
-        return json.loads(text)
+                return json.loads(text)
+            except Exception as e:
+                if isinstance(e, requests.exceptions.HTTPError) and e.response and e.response.status_code == 429 and attempt < 2:
+                    logger.warning(f"Groq NLP API 429. Retrying in {2**(attempt+1)}s...")
+                    time.sleep(2 ** (attempt + 1))
+                    continue
+                raise e
+        return None
 
     def parse_description(
         self,
