@@ -22,6 +22,8 @@ const MapView = dynamic(() => import('../../components/dashboard/MapView'), {
 
 type ViewState = 'map' | 'submit' | 'analytics';
 
+import BackendLockModal from '../../components/dashboard/BackendLockModal';
+
 export default function DashboardPage() {
     const [activeView, setActiveView] = useState<ViewState>('map');
     const [panelData, setPanelData] = useState<any>(null);
@@ -49,6 +51,8 @@ export default function DashboardPage() {
 
     return (
         <div className="flex flex-col h-[calc(100vh-80px)] w-full overflow-hidden bg-neo-bg relative">
+            <BackendLockModal />
+            
             {/* Dashboard Sub-navigation */}
             <div className="flex border-b-3 border-neo-border bg-white z-20 shadow-neo-sm relative overflow-x-auto">
                 <button
