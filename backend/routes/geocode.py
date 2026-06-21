@@ -145,7 +145,7 @@ def _fetch_coordinates(place_name: str) -> tuple[Optional[tuple[float, float]], 
 
     url = "https://nominatim.openstreetmap.org/search"
     params = {"q": query, "format": "json", "limit": 1, "countrycodes": "in"}
-    headers = {"User-Agent": "SmartTrafficIntelligence/1.0 (Local-Hackathon-Project)"}
+    headers = {"User-Agent": "SmartTrafficIntelligence/1.0 (contact: yashpitrod@gmail.com)"}
 
     try:
         resp = requests.get(url, params=params, headers=headers, timeout=5)
