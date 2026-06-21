@@ -108,7 +108,7 @@ def _call_groq_parser(zone_input: str) -> Optional[Dict[str, Any]]:
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {groq_key}"}
     payload = {
-        "model": "groq/compound-mini",
+        "model": "llama-3.1-8b-instant",
         "temperature": 0.0,
         "messages": [
             {"role": "system",    "content": _SYSTEM_PROMPT},
@@ -124,16 +124,27 @@ def _call_groq_parser(zone_input: str) -> Optional[Dict[str, Any]]:
         ],
     }
 
-    try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=10)
-        resp.raise_for_status()
-        raw_text = resp.json()["choices"][0]["message"]["content"].strip()
-        raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
-        raw_text = re.sub(r"\s*```$", "", raw_text)
-        return json.loads(raw_text)
-    except Exception as exc:
-        logger.error("Groq parser error: %s", exc)
-        return None
+    import time
+    for attempt in range(3):
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=10)
+            if resp.status_code == 429:
+                logger.warning(f"Groq parser 429 Too Many Requests. Retrying in {2**(attempt+1)}s...")
+                time.sleep(2 ** (attempt + 1))
+                continue
+            resp.raise_for_status()
+            raw_text = resp.json()["choices"][0]["message"]["content"].strip()
+            raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
+            raw_text = re.sub(r"\s*```$", "", raw_text)
+            return json.loads(raw_text)
+        except Exception as exc:
+            if isinstance(exc, requests.exceptions.HTTPError) and exc.response and exc.response.status_code == 429 and attempt < 2:
+                logger.warning(f"Groq parser 429 Too Many Requests. Retrying in {2**(attempt+1)}s...")
+                time.sleep(2 ** (attempt + 1))
+                continue
+            logger.error("Groq parser error: %s", exc)
+            return None
+    return None
 
 def _fetch_coordinates(place_name: str) -> tuple[Optional[tuple[float, float]], bool]:
     """Calls Nominatim to fetch exact lat/lng for a given place name.
@@ -147,16 +158,27 @@ def _fetch_coordinates(place_name: str) -> tuple[Optional[tuple[float, float]], 
     params = {"q": query, "format": "json", "limit": 1, "countrycodes": "in"}
     headers = {"User-Agent": "SmartTrafficIntelligence/1.0 (contact: yashpitrod@gmail.com)"}
 
-    try:
-        resp = requests.get(url, params=params, headers=headers, timeout=5)
-        resp.raise_for_status()
-        data = resp.json()
-        if data:
-            return (float(data[0]["lat"]), float(data[0]["lon"])), False
-        return None, False
-    except Exception as exc:
-        logger.error("Nominatim lookup failed: %s", exc)
-        return None, True
+    import time
+    for attempt in range(3):
+        try:
+            resp = requests.get(url, params=params, headers=headers, timeout=5)
+            if resp.status_code == 429:
+                logger.warning(f"Nominatim 429 Too Many Requests. Retrying in {2**(attempt+1)}s...")
+                time.sleep(2 ** (attempt + 1))
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            if data:
+                return (float(data[0]["lat"]), float(data[0]["lon"])), False
+            return None, False
+        except Exception as exc:
+            if isinstance(exc, requests.exceptions.HTTPError) and exc.response and exc.response.status_code == 429 and attempt < 2:
+                logger.warning(f"Nominatim 429 Too Many Requests. Retrying in {2**(attempt+1)}s...")
+                time.sleep(2 ** (attempt + 1))
+                continue
+            logger.error("Nominatim lookup failed: %s", exc)
+            return None, True
+    return None, True
 
 def _hybrid_geocode(zone_input: str) -> Optional[Dict[str, Any]]:
     # 0. Demo script guarantee: If user types "Layout" (any casing), force the ambiguous modal

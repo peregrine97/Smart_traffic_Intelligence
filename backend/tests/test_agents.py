@@ -46,10 +46,10 @@ class TestNLPIncidentParser:
             parser = NLPIncidentParser()
         assert parser.groq_key == "env-key-abc"
 
-    def test_default_model_is_compound_mini(self):
-        """Default model should be groq/compound-mini."""
+    def test_default_model_is_llama_instant(self):
+        """Default model should be llama-3.1-8b-instant."""
         parser = NLPIncidentParser(api_key="key")
-        assert parser.default_model == "groq/compound-mini"
+        assert parser.default_model == "llama-3.1-8b-instant"
 
     def test_parse_description_empty_returns_none(self):
         """Empty description should return None without API call."""
