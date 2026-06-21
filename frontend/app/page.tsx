@@ -169,8 +169,8 @@ export default function HomePage() {
                 </div>
 
                 {/* System Icon - Absolute positioned top-right on mobile */}
-                <div className="lg:hidden absolute top-0 right-0 w-[28%] max-w-[120px] aspect-square border-3 border-neo-border overflow-hidden bg-black flex items-center justify-center">
-                  <Brain weight="bold" className="w-1/2 h-1/2 text-primary" />
+                <div className="lg:hidden absolute top-0 right-0 w-[28%] max-w-[120px] aspect-square border-3 border-neo-border overflow-hidden bg-primary flex items-center justify-center">
+                  <Brain weight="bold" className="w-1/2 h-1/2 text-neo-text" />
                 </div>
               </div>
 
@@ -214,11 +214,11 @@ export default function HomePage() {
           {/* Right Column Grid */}
           <div className="hidden lg:flex lg:col-span-4 flex-col gap-6">
             {/* Platform Graphic Card */}
-            <div className="border-3 border-neo-border bg-black p-0 shadow-neo flex-1 min-h-[300px] flex flex-col items-center justify-center relative group overflow-hidden">
+            <div className="border-3 border-neo-border bg-primary p-0 shadow-neo flex-1 min-h-[300px] flex flex-col items-center justify-center relative group overflow-hidden">
               <div className="absolute inset-0 opacity-20 pointer-events-none">
                 <div className="absolute inset-0 bg-center"></div>
               </div>
-              <Brain weight="bold" className="w-32 h-32 text-primary relative z-10" />
+              <Brain weight="bold" className="w-32 h-32 text-neo-text relative z-10" />
               <div className="absolute bottom-4 left-4 font-mono text-[10px] text-primary/50 uppercase tracking-widest z-10">
                 4_Agent_Pipeline // Active
               </div>

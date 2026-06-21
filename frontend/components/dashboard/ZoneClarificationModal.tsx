@@ -72,7 +72,7 @@ export default function ZoneClarificationModal({
         <div className="bg-white border-4 border-neo-border shadow-none md:shadow-[-8px_8px_0_0_rgba(22,51,0,1)] w-full max-w-2xl min-h-full md:min-h-0 flex flex-col my-auto flex-shrink-0">
 
                 {/* ── Header ─────────────────────────────────────────────── */}
-                <div className="flex items-start justify-between p-5 border-b-4 border-neo-border bg-amber-300">
+                <div className="flex items-start justify-between p-5 border-b-4 border-neo-border bg-primary text-neo-text">
                     <div className="flex items-start gap-3">
                         <WarningCircle size={28} weight="bold" className="mt-0.5 flex-shrink-0" />
                         <div>

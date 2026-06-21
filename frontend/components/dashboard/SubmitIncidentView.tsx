@@ -8,10 +8,10 @@ import ZoneClarificationModal from './ZoneClarificationModal';
 // All are routed through the Groq API — no extra keys needed.
 // ---------------------------------------------------------------------------
 const MODEL_OPTIONS = [
-    { id: 'groq/compound-mini',      label: 'Compound Mini',    provider: 'Groq',   badge: 'Fast' },
-    { id: 'llama-3.1-8b-instant',    label: 'Llama 3.1 8B',    provider: 'Meta',   badge: 'Light' },
-    { id: 'openai/gpt-oss-120b',     label: 'GPT OSS 120B',    provider: 'OpenAI', badge: 'Large' },
-    { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B',   provider: 'Meta',   badge: 'Smart' },
+    { id: 'groq/compound-mini', label: 'Compound Mini', provider: 'Groq', badge: 'Fast' },
+    { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B', provider: 'Meta', badge: 'Light' },
+    { id: 'openai/gpt-oss-120b', label: 'GPT OSS 120B', provider: 'OpenAI', badge: 'Large' },
+    { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B', provider: 'Meta', badge: 'Smart' },
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -211,6 +211,12 @@ export default function SubmitIncidentView({ onOpenPanel, onPinDropped }: Submit
             return;
         }
 
+        // ── Validate AI Model is selected ────────────────────────────────────
+        if (!selectedModel) {
+            setError('Please select an AI Model (e.g., Compound Mini) to analyze the incident.');
+            return;
+        }
+
         setIsLoading(true);
 
         try {
@@ -295,9 +301,8 @@ export default function SubmitIncidentView({ onOpenPanel, onPinDropped }: Submit
                         <button
                             type="button"
                             onClick={() => setMode('structured')}
-                            className={`flex-1 py-3 px-2 sm:px-4 font-mono font-bold uppercase flex justify-center items-center gap-2 transition-all text-sm sm:text-base ${
-                                mode === 'structured' ? 'bg-neo-primary text-neo-text' : 'bg-white hover:bg-neo-secondary'
-                            }`}
+                            className={`flex-1 py-3 px-2 sm:px-4 font-mono font-bold uppercase flex justify-center items-center gap-2 transition-all text-sm sm:text-base ${mode === 'structured' ? 'bg-neo-primary text-neo-text' : 'bg-white hover:bg-neo-secondary'
+                                }`}
                         >
                             <ListBullets size={20} weight="bold" className="shrink-0" />
                             <span>Structured</span>
@@ -306,9 +311,8 @@ export default function SubmitIncidentView({ onOpenPanel, onPinDropped }: Submit
                         <button
                             type="button"
                             onClick={() => setMode('nlp')}
-                            className={`flex-1 py-3 px-2 sm:px-4 font-mono font-bold uppercase flex justify-center items-center gap-2 transition-all text-sm sm:text-base ${
-                                mode === 'nlp' ? 'bg-neo-primary text-neo-text' : 'bg-white hover:bg-neo-secondary'
-                            }`}
+                            className={`flex-1 py-3 px-2 sm:px-4 font-mono font-bold uppercase flex justify-center items-center gap-2 transition-all text-sm sm:text-base ${mode === 'nlp' ? 'bg-neo-primary text-neo-text' : 'bg-white hover:bg-neo-secondary'
+                                }`}
                         >
                             <TextAUnderline size={20} weight="bold" className="shrink-0" />
                             <span>Raw Text</span>
@@ -481,33 +485,40 @@ export default function SubmitIncidentView({ onOpenPanel, onPinDropped }: Submit
                                 <span className="text-xs font-normal normal-case text-gray-400 ml-1">(Agent 1 NLP + Agent 4 Plan)</span>
                             </label>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                {MODEL_OPTIONS.map((opt) => (
+                                {MODEL_OPTIONS.map((opt) => {
+                                    const isSelected = selectedModel === opt.id;
+                                    return (
                                     <button
                                         key={opt.id}
                                         type="button"
                                         onClick={() => setSelectedModel(opt.id)}
-                                        className={`relative flex flex-col items-start px-3 py-2 border-3 font-mono text-left transition-all ${
-                                            selectedModel === opt.id
-                                                ? 'border-neo-border bg-neo-primary shadow-none translate-x-[2px] translate-y-[2px]'
-                                                : 'border-neo-border bg-white hover:bg-neo-secondary shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none'
-                                        }`}
+                                        className={`relative flex flex-col items-start px-3 py-3 border-3 font-mono text-left transition-all ${isSelected
+                                            ? 'border-neo-border bg-[#9FE870] shadow-none translate-x-[2px] translate-y-[2px]'
+                                            : 'border-neo-border bg-white hover:bg-[#D4F0C4] shadow-[3px_3px_0px_0px_var(--neo-shadow)] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none'
+                                            }`}
                                     >
                                         <div className="flex items-center justify-between w-full gap-1">
-                                            <span className="text-xs font-bold uppercase truncate">{opt.label}</span>
-                                            <span className={`text-[10px] font-bold px-1.5 py-0.5 border border-neo-border shrink-0 ${
-                                                selectedModel === opt.id ? 'bg-white text-neo-text' : 'bg-neo-bg text-gray-600'
-                                            }`}>{opt.badge}</span>
+                                            <div className="flex items-center gap-2">
+                                                <span className={`text-xs font-black uppercase truncate ${isSelected ? 'text-black' : 'text-neo-text'}`}>{opt.label}</span>
+                                                {isSelected && (
+                                                    <span className="text-black bg-white rounded-full p-0.5">
+                                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <span className={`text-[10px] font-bold px-1.5 py-0.5 border border-neo-border shrink-0 ${isSelected ? 'bg-white text-black' : 'bg-neo-bg text-gray-600'
+                                                }`}>{opt.badge}</span>
                                         </div>
-                                        <span className="text-[10px] text-gray-500 mt-0.5">{opt.provider}</span>
+                                        <span className={`text-[10px] mt-1 font-bold ${isSelected ? 'text-black/80' : 'text-gray-500'}`}>{opt.provider}</span>
                                     </button>
-                                ))}
+                                )})}
                             </div>
                         </div>
 
                         <div className="pt-4">
                             <button
                                 type="submit"
-                                disabled={isBusy || !selectedModel}
+                                disabled={isBusy}
                                 className="w-full btn-neo py-4 text-lg font-bold font-mono uppercase flex justify-center items-center gap-3 disabled:opacity-70 disabled:cursor-not-allowed"
                             >
                                 {isBusy ? (
