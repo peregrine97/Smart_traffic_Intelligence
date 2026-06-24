@@ -35,10 +35,10 @@ if (typeof window !== 'undefined' && typeof HTMLCanvasElement !== 'undefined') {
 // Available LLM models for anomaly plan generation (Agent 4 / Action Planner)
 // ---------------------------------------------------------------------------
 const MODEL_OPTIONS = [
-    { id: 'groq/compound-mini',      label: 'Compound Mini',  provider: 'Groq',   badge: 'Fast' },
-    { id: 'llama-3.1-8b-instant',    label: 'Llama 3.1 8B',  provider: 'Meta',   badge: 'Light' },
-    { id: 'openai/gpt-oss-120b',     label: 'GPT OSS 120B',  provider: 'OpenAI', badge: 'Large' },
-    { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B', provider: 'Meta',   badge: 'Smart' },
+    { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B', provider: 'Meta', badge: 'Fast' },
+    { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B', provider: 'Meta', badge: 'Smart' },
+    { id: 'deepseek-r1-distill-llama-70b', label: 'DeepSeek R1', provider: 'DeepSeek', badge: 'Reasoning' },
+    { id: 'qwen-2.5-32b', label: 'Qwen 2.5 32B', provider: 'Alibaba', badge: 'Balanced' },
 ] as const;
 type ModelId = typeof MODEL_OPTIONS[number]['id'];
 
